@@ -1,6 +1,0 @@
-#!/usr/bin/rarun2
-program=/home/nartes/.local/share/Steam/steamapps/common/Toribash/toribash_steam
-chdir=var/toribash_run
-setenv=LD_PRELOAD=/home/nartes/.local/share/Steam/steamapps/common/Toribash/libsteam_api.so
-stdout=tmp/toribash_out
-#stdin=tmp/toribash_in
