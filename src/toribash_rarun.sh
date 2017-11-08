@@ -1,7 +1,7 @@
 #!/usr/bin/sh
 
 toribash_out=$PWD/build/toribash_out
-toribash_common=~/.local/share/Steam/steamapps/common/Toribash
+toribash_common=$PWD/build/toribash
 
 rm -I $toribash_out
 
@@ -26,5 +26,5 @@ dc
 EOF
 
 r2 -e "dbg.profile=./build/toribash.rr2"\
-   -c ".!cat src/toribash.r2.cmd "\
+   -c ".!cat build/toribash.r2.cmd "\
    -d $toribash_common/toribash_steam
