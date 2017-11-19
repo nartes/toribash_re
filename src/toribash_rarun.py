@@ -123,7 +123,16 @@ elif 'script' == sys.argv[1]:
                 af @ 0x080c0bf0
                 af man.toribash_core @ 0x080b4d10
                 af @ 0x080c0c50
+                af man.gl_init @ 0x080ea3c0
+                af man.lua_init @ 0x080fda40
+                af @ 0x081046d0
+                af @ 0x081fcd90
+                af @ 0x081fce00
             """)
+
+        def af1d(self, fcn = 'man.toribash_core'):
+            refs = [r['addr'] for r in self.rctx.cmdj("afij @ %s" % fcn)[0]['callrefs']]
+            self.rctx.cmd("af @@=%s" % ' '.join([str(i) for i in refs]))
 
         def r2_init(self):
             self.init()
@@ -146,6 +155,9 @@ elif 'script' == sys.argv[1]:
                 dc
                 db man.toribash_core
                 dc
+                #!echo The work is out there.
+                #db 0x080e4d86
+                #db 0x08104c73
                 #wa mov eax, 0@@=\`axt @@ sym.imp.Steam*~man.steam_init[1]\`
                 #k a=\`f~sym.imp.Steam:2[0]\`
                 #k n=\`f~sym.imp.Steam:2[2]\`
@@ -173,6 +185,7 @@ elif 'script' == sys.argv[1]:
         def final(self):
             self.r2_init()
             self.patch_steam_init()
+            self.af1d()
             self.test()
             self.kill_server()
 
