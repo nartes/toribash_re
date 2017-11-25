@@ -66,6 +66,7 @@ os.environ['toribash_out'] = sub_shell('echo -E $PWD/build/toribash_out',
 os.environ['toribash_common'] = sub_shell('echo -E $PWD/build/toribash',
                                           communicate = True).strip()
 os.environ['radare2_http_port'] = os.environ.get('radare2_http_port') or '9998'
+os.environ['radare2_tcp_port'] = os.environ.get('radare2_tcp_port') or '9997'
 
 if 'run' == sys.argv[-1]:
     sub_shell(r'rm -I $toribash_out', verbose = True, critical = False)
@@ -79,11 +80,12 @@ if 'run' == sys.argv[-1]:
         + '\nEOF' + r"""
 
         cat <<EOF > $TORIBASH_PROJECT_ROOT/build/toribash.r2.cmd
-            e http.sandbox=false
-            e http.no_pipe=true
-            e http.bind=127.0.0.1
-            e http.port=""" + os.environ['radare2_http_port'] + r"""
-            =h
+            #e http.sandbox=false
+            #e http.no_pipe=true
+            #e http.bind=127.0.0.1
+            #e http.port=""" + os.environ['radare2_http_port'] + r"""
+            #=h
+            .:""" + os.environ['radare2_tcp_port'] + r"""
             """\
         + '\nEOF' + r"""
     """, verbose = True)
@@ -101,18 +103,33 @@ if 'run' == sys.argv[-1]:
         fi
     """, verbose = True)
 elif 'script' == sys.argv[1]:
+    class Rctx:
+        def __init__(self, url):
+            self.url = url
+
+        def _ctx(self):
+            return r2pipe.open(self.url)
+
+        def cmd(self, cmds):
+            return self._ctx().cmd(cmds)
+
+        def cmdj(self, cmds):
+            return self._ctx().cmdj(cmds)
+
     class Algos:
         def __init__(self):
-            self.rctx = r2pipe.open("http://127.0.0.1:%s" % os.environ['radare2_http_port'])
+            self.rctx = Rctx("tcp://127.0.0.1:%s" % os.environ['radare2_tcp_port'])
+            #self.rctx = r2pipe.open("http://127.0.0.1:%s" % os.environ['radare2_http_port'])
 
         def run_lines(self, cmds):
             for l in cmds.split('\n'):
                 l = l.strip()
 
-                if l:
+                if l and not l.startswith('#'):
                     print("Consequent command: %s" % l)
                     self.rctx.cmd(l)
-
+                else:
+                    print("Ignored: %s" % l)
 
         def manual_functions(self):
             self.run_lines(r"""
@@ -145,7 +162,8 @@ elif 'script' == sys.argv[1]:
 
         def kill_server(self):
             self.run_lines(r"""
-                =h--
+                #=h--
+                .--
             """)
         def test(self):
             self.run_lines(r"""
