@@ -145,6 +145,11 @@ elif 'script' == sys.argv[1]:
                 af @ 0x081046d0
                 af @ 0x081fcd90
                 af @ 0x081fce00
+
+                #0x083b8000 lua static code
+                #0x083bb770 lua stack cmd
+                #0x083bb390 lua stack cmd
+                #0x080fdf00 population of lua functions
             """)
 
         def af1d(self, fcn = 'man.toribash_core'):
