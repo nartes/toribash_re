@@ -216,3 +216,161 @@ elif 'script' == sys.argv[1]:
 
     if len(sys.argv) == 3:
         getattr(algos, sys.argv[2])()
+elif 'make' == sys.argv[1]:
+    class Tasks:
+        def __init__(self):
+            pass
+
+        def check(self):
+            sub_shell(r"""
+                cd $TORIBASH_PROJECT_ROOT;\
+                make check;
+            """, critical = True, verbose = True)
+
+        def recover(self):
+            sub_shell(r"""
+                cd $TORIBASH_PROJECT_ROOT;\
+                make recover;
+            """, critical = True, verbose = True)
+
+        def lua_test(self):
+            sub_shell(r"""
+                cd $TORIBASH_PROJECT_ROOT;\
+                make lua_test;
+            """, critical = True, verbose = True)
+
+        def _older(self, path1, path2):
+            res = False
+
+            for p2 in path2:
+                if not os.path.exists(path2):
+                    res = True
+                    break
+
+                if not os.path.exists(path1):
+                    raise ValueError('The source is not valid: %s!' % path1)
+
+                if os.stat(path1).st_mtime > os.stat(path2).st_mtime:
+                    res = True
+                    break
+
+            return res
+
+        def _build(self, lang, name, s, tb, to, bit, abi, cc, optimize):
+            flags = []
+            cflags = (os.environ.get('CFLAGS') or '').split(' ')
+            cxxflags = (os.environ.get('CXXFLAGS') or '').split(' ')
+            ldflags = (os.environ.get('LDFLAGS') or '').split(' ')
+
+            flags += ['-m' + bit]
+            ldflags += ['-m' + bit]
+
+            if name == 'c_constructs':
+                flags += ['-Dfactorial_attributes=' + cc]
+
+            #if lang == 'g++':
+            #    cxxflags += ['-mabi=' + abi]
+
+            if optimize != 'NO_OPT':
+                flags += ['-' + optimize]
+
+            cflags += flags
+            cxxflags += flags
+
+            compiler = None
+            linker = None
+            strip = None
+
+            _cflags = ' '.join(cflags)
+            _cxxflags = ' '.join(cxxflags)
+            _ldflags = ' '.join(ldflags)
+            _srcs = ' '.join(s)
+
+            if self._older(tb, tb + '_striped'):
+                strip = r"""
+                    cp {target} {target}_striped;\
+                    strip {target}_striped;
+                """.format(target = tb)
+
+
+            if lang == 'gcc':
+                if self._older(_srcs, to):
+                    compiler = 'gcc {cflags} -o {cobject} -c {srcs}'\
+                            .format(
+                                cflags = _cflags,
+                                cobject = to,
+                                srcs = _srcs)
+                if self._older(to, tb):
+                    linker = 'gcc {ldflags} -o {ctarget} {cobject}'\
+                            .format(
+                                ldflags = _ldflags,
+                                ctarget = tb,
+                                cobject = to)
+            elif lang == 'g++':
+                if self._older(_srcs, to):
+                    compiler = 'g++ {cxxflags} -o {cxxobject} -c {srcs}'\
+                            .format(
+                                cxxflags = _cxxflags,
+                                cxxobject = to,
+                                srcs = _srcs)
+                if self._older(to, tb):
+                    linker = 'g++ {ldflags} -o {cxxtarget} {cxxobject}'\
+                            .format(
+                                ldflags = _ldflags,
+                                cxxtarget = tb,
+                                cxxobject = to)
+
+            for c in [compiler, linker, strip]:
+                if c is not None:
+                    sub_shell(r"""
+                        cd $TORIBASH_PROJECT_ROOT;
+                        {command}
+                    """.format(command = c),
+                    critical = True, verbose = True)
+
+        def experiments(self):
+            src = ['src/experiments', 'build',
+                   ['gcc', 'c_constructs', 'c_constructs.c'],
+                   ['g++', 'cpp_constructs', 'cpp_constructs.cpp']]
+
+            for t in src[2:]:
+                s = [os.path.join(src[0], x) for x in t[2:]]
+                tb = os.path.join(src[1], t[1])
+
+                cc_l = [None]
+
+                abi_l = [None]
+
+                if t[1] == 'c_constructs':
+                    cc_l = ['cdecl', 'fastcall', 'thiscall',
+                            'ms_abi', 'sysv_abi']
+
+                #abi_l = ['ms_abi', 'sysv'_abi']
+
+                for bit in ['32', '64']:
+                    for abi in abi_l:
+                        for o in ['NO_OPT', 'O1', 'O2', 'O3']:
+                            for cc in cc_l:
+                                suffix =\
+                                    '_' + '_'.join([x for x in [bit, abi, o, cc]\
+                                                    if x is not None])
+                                self._build(
+                                    lang = t[0],
+                                    name = t[1],
+                                    s = s,
+                                    tb = tb + suffix,
+                                    to = tb + suffix + '.o',
+                                    bit = bit,
+                                    abi = abi,
+                                    optimize = o,
+                                    cc = cc)
+        def clean(self):
+            sub_shell(r"""
+                cd $TORIBASH_PROJECT_ROOT;
+                rm -fr build/*;
+            """, critical = True, verbose = True)
+
+    tasks = Tasks()
+
+    if len(sys.argv) == 3:
+        getattr(tasks, sys.argv[2])()
