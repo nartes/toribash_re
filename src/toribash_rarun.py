@@ -23,6 +23,22 @@ os.environ['RPDB_GIT'] = os.path.join(
 os.environ['AUTOPEP8_BINARY'] = os.environ.get('AUTOPEP8_BINARY') or\
     sys.executable + " -m autopep8"
 
+os.environ['RADARE2_GIT'] = os.environ.get('RADARE2_GIT') or\
+    os.path.join(
+        os.environ['TORIBASH_PROJECT_ROOT'], '..', 'radare2', 'tmp',
+        'install')
+
+if not os.path.exists(os.environ['RADARE2_GIT']):
+    raise ValueError("Can not find GIT radare2 installation:\n%s" %
+                     os.environ['RADARE2_GIT'])
+else:
+    os.environ['PATH'] = os.path.join(os.environ['RADARE2_GIT'], 'bin') +\
+        os.path.pathsep + (os.environ.get('PATH') or '')
+
+    os.environ['LD_LIBRARY_PATH'] = os.path.join(os.environ['RADARE2_GIT'], 'lib') +\
+        os.path.pathsep + (os.environ.get('LD_LIBRARY_PATH') or '')
+
+
 for p, e, i in [(os.environ['R2_PIPE_GIT'], 'Warning: not found GIT r2pipe',
                  'r2pipe'),
                 (os.environ['RPDB_GIT'], 'Warning: not found GIT rpdb', 'rpdb')]:
@@ -579,8 +595,12 @@ if __name__ == '__main__':
             (cls, meth) = sys.argv[2].split('.')
             suite.addTest(globals()[cls](meth))
             suite.debug()
-    elif 'autopep8':
+    elif 'autopep8' == sys.argv[1]:
         for f in [os.path.abspath(__file__)]:
             sub_shell(r"""
                 %s -i %s
             """ % (os.environ['AUTOPEP8_BINARY'], f), verbose=True)
+    elif 'r2' == sys.argv[1]:
+        sub_shell(r"""
+            %s
+        """ % ' '.join(sys.argv[2:]), verbose=True)
