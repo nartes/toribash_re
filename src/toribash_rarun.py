@@ -542,7 +542,7 @@ class Tasks:
 
 
 if __name__ == '__main__':
-    if 'run' == sys.argv[-1]:
+    if 'run' == sys.argv[1]:
         sub_shell(r'rm -I $toribash_out', verbose=True, critical=False)
 
         sub_shell(r"""
@@ -604,3 +604,5 @@ if __name__ == '__main__':
         sub_shell(r"""
             %s
         """ % ' '.join(sys.argv[2:]), verbose=True)
+    else:
+        raise ValueError("\n\tUnknown command:\n\t\t%s\n" % ' '.join(sys.argv[1:]))
