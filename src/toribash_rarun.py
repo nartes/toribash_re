@@ -39,19 +39,19 @@ else:
         os.path.pathsep + (os.environ.get('LD_LIBRARY_PATH') or '')
 
 
-for p, e, i in [(os.environ['R2_PIPE_GIT'], 'Warning: not found GIT r2pipe',
-                 'r2pipe'),
-                (os.environ['RPDB_GIT'], 'Warning: not found GIT rpdb', 'rpdb')]:
+for p, e in [(os.environ['R2_PIPE_GIT'], 'Warning: not found GIT r2pipe'),
+             (os.environ['RPDB_GIT'], 'Warning: not found GIT rpdb')]:
     try:
         if not os.path.exists(p):
             raise ValueError(r"The Path doesn't exists %s" % k)
         else:
             sys.path.insert(0, p)
 
-        importlib.import_module(i)
     except Exception as ex:
         print(e)
         raise(ex)
+
+import r2pipe
 
 os.environ['MAKE_JOBS'] = os.environ.get('MAKE_JOBS') or\
     str(os.cpu_count())
