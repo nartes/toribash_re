@@ -7,6 +7,8 @@ import multiprocessing
 import functools
 import unittest
 import importlib
+import optparse
+import json
 
 
 os.environ['TORIBASH_PROJECT_ROOT'] =\
@@ -55,6 +57,67 @@ import r2pipe
 
 os.environ['MAKE_JOBS'] = os.environ.get('MAKE_JOBS') or\
     str(os.cpu_count())
+
+
+class Utils:
+    def sub_shell(cmds,
+                  communicate=False,
+                  stderr_to_stdout=False,
+                  verbose=False,
+                  wait=True,
+                  env=dict(list(os.environ.items())),
+                  critical=True):
+        ret = None
+
+        tf = tempfile.mktemp()
+        f = io.open(tf, 'w')
+        f.write(u'' + cmds)
+        f.close()
+
+        if verbose:
+            print('*' * 9 + 'BEGIN_COMAND' + '*' * 9)
+            print(tf)
+            print('*' * 9 + '************' + '*' * 9)
+            print(cmds)
+            print('*' * 9 + 'END_COMAND' + '*' * 9)
+
+        _env = dict([(k.upper(), str(v)) for (k, v) in env.items()])
+
+        if communicate:
+            inp = subprocess.PIPE
+            outp = subprocess.PIPE
+            if stderr_to_stdout:
+                errp = outp
+            else:
+                errp = subprocess.PIPE
+
+            proc = subprocess.Popen(['zsh', tf],
+                                    stdin=subprocess.PIPE,
+                                    stdout=subprocess.PIPE,
+                                    env=_env)
+            try:
+                proc.wait()
+                out, err = proc.communicate()
+                ret = out.decode()
+            except:
+                proc.kill()
+        else:
+            proc = subprocess.Popen(['zsh', tf],
+                                    stdin=sys.stdin,
+                                    stdout=sys.stdout,
+                                    stderr=sys.stderr,
+                                    env=_env)
+            try:
+                if wait:
+                    proc.wait()
+            except:
+                proc.kill()
+
+        if wait:
+            if proc.returncode != 0 and critical:
+                raise ValueError(proc.returncode)
+
+        return ret
 
 
 def sub_shell(cmds,
@@ -366,8 +429,63 @@ class JobsProcessor(multiprocessing.Process):
 
 
 class Tasks:
-    def __init__(self):
-        pass
+    def __init__(self, args):
+        parser = optparse.OptionParser()
+        parser.add_option("-t", "--task", dest="task",
+                          help="a name of the main task")
+        parser.add_option("--stage", dest="stage", type="int", default=1,
+                          help="an intermediate stage number to continue from")
+        parser.add_option("--env", dest="env", default=json.dumps({}),
+                          help="additional environmental variables as a json string")
+        parser.add_option("-V", "--verbose", dest="verbose", action="store_true", default=False,
+                          help="enable the verbose mode")
+
+        self._options, self._args = parser.parse_args(args)
+
+        self._initial_args = args
+
+        self.setup()
+
+        if self._options.task in ['lua_test']:
+            getattr(self, self._options.task)()
+        else:
+            raise ValueError('Unknown command %s' % ' '.join(args))
+
+    def setup(self):
+        self._env = {}
+
+        self._env.update(dict([
+            (k.lower(), v) for (k, v) in json.loads(self._options.env).items()
+        ]))
+
+        self._env['project_root'] = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), '..'))
+        self._env['lua_cli'] = os.path.join(
+            self._env['project_root'],
+            'deps',
+            'lua',
+            'src',
+            'lua.py'
+        )
+        self._env['python_executable'] = self._env.get(
+            'python_executable',
+            os.path.join(self._env['project_root'],
+                         'tmp', 'env', 'bin', 'python')
+        )
+
+    def _sub_shell(self, cmds, env={}, *args, **kwargs):
+        return Utils.sub_shell(
+            cmds=cmds,
+            env=dict([
+                (k.lower(), v) for (k, v) in
+                list(os.environ.items()) +
+                list(self._env.items()) +
+                list(env.items())
+            ]),
+            verbose=self._options.verbose,
+            *args,
+            **kwargs
+        )
 
     def check(self):
         sub_shell(r"""
@@ -381,11 +499,109 @@ class Tasks:
             make recover;
         """, critical=True, verbose=True)
 
+    def _stage_init(self, start_count):
+        self._start_count = start_count
+        self._stage_count = 1
+        self._stage_stack = []
+
+        if self._options.verbose:
+            print("_stage_init, _stage_count=%d" % self._stage_count)
+
+    def _stage_step(self):
+        self._stage_count += 1
+
+        if self._options.verbose:
+            print("_stage_step, _stage_count=%d" % self._stage_count)
+
+    def _stage_save(self, name):
+        self._stage_stack.append([name, self._stage_count])
+
+        if self._options.verbose:
+            print("_stage_save, _stage_count=%d" % self._stage_count)
+
+    def _stage_load(self, name):
+        while self._stage_stack[-1][0] != name:
+            del self._stage_stack[-1]
+
+        self._stage_count = self._stage_stack[-1][1]
+
+        if self._options.verbose:
+            print("_stage_load, _stage_count=%d" % self._stage_count)
+
+    def _stage_filter(self):
+        if self._stage_count < self._start_count:
+            return True
+        else:
+            return False
+
     def lua_test(self):
-        sub_shell(r"""
-            cd $TORIBASH_PROJECT_ROOT;\
-            make lua_test;
-        """, critical=True, verbose=True)
+        self._stage_init(self._options.stage)
+
+        self._stage_save('a')
+
+        for opt in ['-O0', '-O2', '-O3']:
+            for bit in [32, 64]:
+                _env = None
+
+                self._stage_load('a')
+
+                for t in ['custom_prefix', 'environment']:
+                    if self._stage_filter():
+                        self._stage_step()
+                        continue
+
+                    _prefix = '%d_%s' % (bit, opt[1:].lower())
+
+                    ret = self._sub_shell(r"""
+cd $PROJECT_ROOT;
+CC=clang CFLAGS="$OPT -g -fPIC -m$BIT" LDFLAGS="-fPIC -m$BIT"\
+    $PYTHON_EXECUTABLE $LUA_CLI -t $TASK {args};
+                        """.format(
+                        args=' '.join([
+                            self._options.verbose and '-V' or '',
+                            '--env=\'{env}\''.format(env=json.dumps({
+                                'prefix': os.path.join(
+                                    self._env['project_root'], 'build', 'lua_' + _prefix
+                                ),
+                                'pkgname': 'lua_' + _prefix
+                            }))
+                        ])
+                    ),
+                        env={
+                            'bit': bit,
+                            'opt': opt,
+                            'task': t
+                    },
+                        communicate=(t == 'environment')
+                    )
+
+                    if t == 'environment':
+                        _env = json.loads(ret)
+
+                    self._stage_step()
+
+                self._sub_shell(r"""
+cd $PROJECT_ROOT;
+export LD_LIBRARY_PATH=$_LD_LIBRARY_PATH:$LD_LIBRARY_PATH
+export PKG_CONFIG_PATH=$_PKG_CONFIG_PATH:$PKG_CONFIG_PATH
+echo `pkg-config $PKGNAME --libs`
+$CC -g -m$BIT $OPT -o build/lua_test_${_PREFIX}.o -c src/lua.cpp `pkg-config $PKGNAME --cflags`;
+$CC -m$BIT -o build/lua_test_${_PREFIX} build/lua_test_${_PREFIX}.o `pkg-config $PKGNAME --libs`;
+                    """,
+                                env={
+                                    '_prefix': '%d_%s_%s' % (bit, 'clang', opt[1:].lower()),
+                                    'opt': opt,
+                                    'bit': bit,
+                                    'cc': 'clang',
+                                    '_ld_library_path': _env['ld_library_path'],
+                                    '_pkg_config_path': _env['pkg_config_path'],
+                                    'pkgname': _env['pkgname']
+                                }
+                                )
+
+                self._stage_step()
+
+            self._stage_step()
 
     def _older(self, path1, path2):
         res = False
@@ -582,10 +798,7 @@ if __name__ == '__main__':
         if len(sys.argv) == 3:
             getattr(algos, sys.argv[2])()
     elif 'make' == sys.argv[1]:
-        tasks = Tasks()
-
-        if len(sys.argv) == 3:
-            getattr(tasks, sys.argv[2])()
+        Tasks(sys.argv[2:])
     elif 'unit_test' == sys.argv[1]:
         sys.argv = sys.argv[:1] + sys.argv[2:]
         unittest.main()
@@ -605,4 +818,5 @@ if __name__ == '__main__':
             %s
         """ % ' '.join(sys.argv[2:]), verbose=True)
     else:
-        raise ValueError("\n\tUnknown command:\n\t\t%s\n" % ' '.join(sys.argv[1:]))
+        raise ValueError("\n\tUnknown command:\n\t\t%s\n" %
+                         ' '.join(sys.argv[1:]))

@@ -1,0 +1,3 @@
+[submodule "deps/lua"]
+	path = deps/lua
+	url = /home/nartes/Documents/current/toribash/../lua
