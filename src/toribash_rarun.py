@@ -554,7 +554,7 @@ class Tasks:
 
                     ret = self._sub_shell(r"""
 cd $PROJECT_ROOT;
-CC=clang CFLAGS="$OPT -g -fPIC -m$BIT" LDFLAGS="-fPIC -m$BIT"\
+CC=clang CFLAGS="$OPT -g -m$BIT" LDFLAGS="-m$BIT"\
     $PYTHON_EXECUTABLE $LUA_CLI -t $TASK {args};
                         """.format(
                         args=' '.join([
@@ -584,9 +584,10 @@ CC=clang CFLAGS="$OPT -g -fPIC -m$BIT" LDFLAGS="-fPIC -m$BIT"\
 cd $PROJECT_ROOT;
 export LD_LIBRARY_PATH=$_LD_LIBRARY_PATH:$LD_LIBRARY_PATH
 export PKG_CONFIG_PATH=$_PKG_CONFIG_PATH:$PKG_CONFIG_PATH
-echo `pkg-config $PKGNAME --libs`
 $CC -g -m$BIT $OPT -o build/lua_test_${_PREFIX}.o -c src/lua.cpp `pkg-config $PKGNAME --cflags`;
 $CC -m$BIT -o build/lua_test_${_PREFIX} build/lua_test_${_PREFIX}.o `pkg-config $PKGNAME --libs`;
+$CC -m$BIT -o build/lua_test_static_${_PREFIX}\
+    build/lua_test_${_PREFIX}.o `pkg-config --variable=static_libs $PKGNAME`;
                     """,
                                 env={
                                     '_prefix': '%d_%s_%s' % (bit, 'clang', opt[1:].lower()),
