@@ -446,7 +446,7 @@ class Tasks:
 
         self.setup()
 
-        if self._options.task in ['lua_test']:
+        if self._options.task in ['lua_test', 'inject']:
             getattr(self, self._options.task)()
         else:
             raise ValueError('Unknown command %s' % ' '.join(args))
@@ -486,6 +486,12 @@ class Tasks:
             *args,
             **kwargs
         )
+
+    def inject(self):
+        self._sub_shell(r"""
+            cd $PROJECT_ROOT;
+            make inject;
+            """)
 
     def check(self):
         sub_shell(r"""
@@ -758,6 +764,127 @@ $CC -m$BIT -o build/lua_test_static_${_PREFIX}\
         """, critical=True, verbose=True)
 
 
+class Radare:
+    def __init__(self, args):
+        parser = optparse.OptionParser()
+        parser.add_option("-t", "--task", dest="task", default="run",
+                          help="a name of the main task")
+        parser.add_option("--env", dest="env", default=json.dumps({}),
+                          help="additional environmental variables as a json string")
+        parser.add_option("--rarun", dest="rarun", default=json.dumps({}),
+                          help="specify rarun options as a json string")
+        parser.add_option("--tcp_server_port", dest="tcp_server_port", type="int",
+                          help="set a port to listen for the tcp server")
+        parser.add_option("-c", "--cmds", dest="cmds", action="append",
+                          help="specify r2 commands as multiline strings," +
+                               "or put - to consume the commands fron stdin")
+        parser.add_option("-V", "--verbose", dest="verbose", action="store_true", default=False,
+                          help="enable the verbose mode")
+
+        self._cmds = []
+
+        self._options, self._args = parser.parse_args(args)
+
+        self._initial_args = args
+
+        self.setup()
+
+        if self._options.task in ['run']:
+            getattr(self, self._options.task)()
+        else:
+            raise ValueError('Unknown command %s' % ' '.join(args))
+
+    def _join_paths(self, *args):
+        f = [p for p in args if p is not None and p != '']
+
+        return os.path.pathsep.join(f)
+
+    def setup(self):
+        self._env = {}
+
+        self._env.update(dict([
+            (k.lower(), v) for (k, v) in
+            list(os.environ.items()) +
+            list(json.loads(self._options.env).items())
+        ]))
+
+        self._env['project_root'] = self._env.get('project_root',
+                                                  os.path.join(os.path.dirname(__file__), '..'))
+
+        self._env['prefix'] = self._env.get('prefix',
+                                            os.path.join('..', 'radare2', 'tmp', 'install'))
+
+        self._env['path'] = self._join_paths(
+            os.path.join(self._env['prefix'], 'bin'),
+            self._env.get('path')
+        )
+
+        self._env['ld_library_path'] = self._join_paths(
+            os.path.join(self._env['prefix'], 'lib', 'libr'),
+            self._env.get('ld_library_path')
+        )
+
+        self._env['pkg_config_path'] = self._join_paths(
+            os.path.join(self._env['prefix'], 'lib', 'pkgconfig'),
+            self._env.get('pkg_config_path')
+        )
+
+        self._rarun = {
+            'params': json.loads(self._options.rarun)
+        }
+
+        if len(self._rarun['params']):
+            self._env['rr2profile'] = tempfile.mktemp()
+            if self._options.verbose:
+                print('rr2profile %s' % self._env['rr2profile'])
+            with io.open(self._env['rr2profile'], 'w') as f:
+                f.write(u'' +
+                        '\n'.join(['%s=%s' % (k, v)
+                                   for (k, v) in self._rarun['params']])
+                        )
+
+        self._cmds = []
+        for c in self._options.cmds:
+            if c == '-':
+                self._cmds.append(sys.stdin.read())
+            else:
+                self._cmds.append(c)
+
+        if self._options.tcp_server_port is not None:
+            self._cmds.append('.: %d' % self._options.tcp_server_port)
+
+        self._env['r2cmds'] = tempfile.mktemp()
+        with io.open(self._env['r2cmds'], 'w') as f:
+            f.write(u'' + '\n'.join(self._cmds))
+
+        if self._options.verbose:
+            print('r2cmds %s' % self._env['r2cmds'])
+
+    def _sub_shell(self, cmds, env={}, *args, **kwargs):
+        return Utils.sub_shell(
+            cmds=cmds,
+            env=dict([
+                (k.lower(), v) for (k, v) in
+                list(os.environ.items()) +
+                list(self._env.items()) +
+                list(env.items())
+            ]),
+            verbose=self._options.verbose,
+            *args,
+            **kwargs
+        )
+
+    def run(self):
+        self._sub_shell(r"""
+            r2 {rarun} -c ".!cat $R2CMDS" {args};
+            """.replace('{args}', ' '.join(self._args))
+                        .replace(
+            '{rarun}',
+            len(self._rarun['params']
+                ) and r'-e "dbg.profile=$RR2PROFILE"' or ''
+        ))
+
+
 if __name__ == '__main__':
     if 'run' == sys.argv[1]:
         sub_shell(r'rm -I $toribash_out', verbose=True, critical=False)
@@ -814,10 +941,8 @@ if __name__ == '__main__':
             sub_shell(r"""
                 %s -i %s
             """ % (os.environ['AUTOPEP8_BINARY'], f), verbose=True)
-    elif 'r2' == sys.argv[1]:
-        sub_shell(r"""
-            %s
-        """ % ' '.join(sys.argv[2:]), verbose=True)
+    elif 'radare2' == sys.argv[1]:
+        Radare(sys.argv[2:])
     else:
         raise ValueError("\n\tUnknown command:\n\t\t%s\n" %
                          ' '.join(sys.argv[1:]))

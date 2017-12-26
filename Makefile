@@ -8,3 +8,10 @@ recover:
 
 clean:
 	rm -fr build/*
+
+inject: src/mylib/inject.cpp
+	gcc -c -fPIC -o build/inject.o $< -g -O0 -m32
+	g++ -o build/inject.so -shared build/inject.o -m32
+
+
+src/mylib/inject.cpp: src/mylib/inject.hpp
