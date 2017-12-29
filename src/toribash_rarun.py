@@ -9,6 +9,7 @@ import unittest
 import importlib
 import optparse
 import json
+import pprint
 
 
 os.environ['TORIBASH_PROJECT_ROOT'] =\
@@ -82,6 +83,9 @@ class Utils:
             print('*' * 9 + 'END_COMAND' + '*' * 9)
 
         _env = dict([(k.upper(), str(v)) for (k, v) in env.items()])
+
+        if verbose:
+            pprint.pprint(_env)
 
         if communicate:
             inp = subprocess.PIPE
@@ -200,13 +204,15 @@ class Algos:
         self.rctx = Rctx("tcp://127.0.0.1:%s" % os.environ['radare2_tcp_port'])
         #self.rctx = r2pipe.open("http://127.0.0.1:%s" % os.environ['radare2_http_port'])
 
-    def run_lines(self, cmds):
+    def run_lines(self, cmds, with_output=False):
         for l in cmds.split('\n'):
             l = l.strip()
 
             if l and not l.startswith('#'):
                 print("Consequent command: %s" % l)
-                self.rctx.cmd(l)
+                ret = self.rctx.cmd(l)
+                if with_output:
+                    print(ret)
             else:
                 print("Ignored: %s" % l)
 
@@ -230,6 +236,44 @@ class Algos:
             #0x083bb390 lua stack cmd
             #0x080fdf00 population of lua functions
         """)
+
+    def call_inject(self):
+        self.run_lines(r"""
+aa
+db main
+dc
+dm
+        """, with_output=True)
+
+        self.run_lines(r"""
+s `dm~inject:1[0]`
+/x 5589e55383ec14e8f7fe
+        """, with_output=True)
+
+        assert int(self.rctx.cmd("f~hit[0]"), 16) > 0x60000000
+
+        self.run_lines(r"""
+afr sym.abc @ `f~hit[0]`
+        """, with_output=True)
+
+        assert int(self.rctx.cmd("f~sym.abc[0]"), 16) > 0
+
+        self.run_lines(r"""
+ds 6
+.--
+        """, with_output=True)
+
+    def call_inject_2(self):
+        self.run_lines(r"""
+wa jmp `f~sym.abc[0]`@@=eip
+        """, with_output=True)
+
+        assert self.rctx.cmdj("aoj @@ eip")[0]['mnemonic'] == 'jmp'
+        assert self.rctx.cmdj("aoj @@ eip")[0]['jump'] == int(
+            self.rctx.cmd("f~sym.abc[0]"), 16)
+
+        self.rctx.cmd("s eip")
+        self.rctx.cmd(".--")
 
     def af1d(self, fcn='man.toribash_core'):
         refs = [r['addr']
@@ -775,7 +819,9 @@ class Radare:
                           help="specify rarun options as a json string")
         parser.add_option("--tcp_server_port", dest="tcp_server_port", type="int",
                           help="set a port to listen for the tcp server")
-        parser.add_option("-c", "--cmds", dest="cmds", action="append",
+        parser.add_option("--args", dest="args", default="-",
+                          help="set the direct r2 arguments")
+        parser.add_option("-c", "--cmds", dest="cmds", action="append", default=[],
                           help="specify r2 commands as multiline strings," +
                                "or put - to consume the commands fron stdin")
         parser.add_option("-V", "--verbose", dest="verbose", action="store_true", default=False,
@@ -833,14 +879,14 @@ class Radare:
             'params': json.loads(self._options.rarun)
         }
 
-        if len(self._rarun['params']):
+        if len(self._rarun['params']) > 0:
             self._env['rr2profile'] = tempfile.mktemp()
             if self._options.verbose:
                 print('rr2profile %s' % self._env['rr2profile'])
             with io.open(self._env['rr2profile'], 'w') as f:
                 f.write(u'' +
                         '\n'.join(['%s=%s' % (k, v)
-                                   for (k, v) in self._rarun['params']])
+                                   for (k, v) in self._rarun['params'].items()])
                         )
 
         self._cmds = []
@@ -860,6 +906,8 @@ class Radare:
         if self._options.verbose:
             print('r2cmds %s' % self._env['r2cmds'])
 
+        self._env['radare2_args'] = self._options.args
+
     def _sub_shell(self, cmds, env={}, *args, **kwargs):
         return Utils.sub_shell(
             cmds=cmds,
@@ -877,7 +925,7 @@ class Radare:
     def run(self):
         self._sub_shell(r"""
             r2 {rarun} -c ".!cat $R2CMDS" {args};
-            """.replace('{args}', ' '.join(self._args))
+            """.replace('{args}', self._env['radare2_args'])
                         .replace(
             '{rarun}',
             len(self._rarun['params']
