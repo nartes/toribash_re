@@ -10,6 +10,7 @@ import importlib
 import optparse
 import json
 import pprint
+import glob
 
 
 os.environ['TORIBASH_PROJECT_ROOT'] =\
@@ -985,7 +986,10 @@ if __name__ == '__main__':
             suite.addTest(globals()[cls](meth))
             suite.debug()
     elif 'autopep8' == sys.argv[1]:
-        for f in [os.path.abspath(__file__)]:
+        for f in glob.glob(
+                os.path.join(os.path.abspath(
+                    os.path.dirname(__file__)), '..', 'src', '*.py')
+        ):
             sub_shell(r"""
                 %s -i %s
             """ % (os.environ['AUTOPEP8_BINARY'], f), verbose=True)
