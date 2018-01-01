@@ -8,11 +8,25 @@ import numpy
 import pprint
 import sys
 import functools
+import matplotlib.pyplot
 
 
 class Statistics:
     def __init__(self):
-        pass
+        self._setup()
+
+    def _setup(self):
+        self._env = {}
+
+        self._env['project_root'] = os.path.join(
+            os.path.abspath(os.path.dirname(__file__)), '..')
+        self._env['replays'] = os.path.join(
+            self._env['project_root'], 'build', 'toribash', '**', '*.rpl'
+        )
+
+        self._replays = glob.glob(self._env['replays'], recursive=True)
+
+        self._env['verbose'] = True
 
     def parse_replay(self, fpath):
         replay_string = None
@@ -132,16 +146,38 @@ class Statistics:
 
         return res
 
+    def draw_scores(self):
+        out_dir = os.path.join(self._env['project_root'], 'build', 'scores')
+        os.system('mkdir -p ' + out_dir)
+
+        for f in self._replays:
+            out_png = os.path.join(
+                out_dir, os.path.split(f)[1] + '.png'
+            )
+
+            if self._env['verbose']:
+                print(f)
+
+            if os.path.exists(out_png):
+                if self._env['verbose']:
+                    print('skip %s' % f)
+                continue
+
+            r = self.parse_replay(f)
+
+            fig = matplotlib.pyplot.figure()
+            matplotlib.pyplot.plot([x['frame']['score'] for x in r['entries']])
+            fig.savefig(out_png)
+
 
 class TestStatistics(unittest.TestCase):
     def test_should_be_consistent_with_replay_format(self):
-        statistics = Statistics()
+        s = Statistics()
 
-        for f in glob.glob(os.path.join('build', 'toribash', 'replay', '**', '*.rpl')) + \
-                glob.glob(os.path.join('build', 'toribash', 'replay', '*.rpl')):
+        for f in s._replays:
             sys.stderr.write(f + '\n')
 
-            replay = statistics.parse_replay(f)
+            replay = s.parse_replay(f)
 
             self.assertTrue(
                 numpy.all(
