@@ -9,6 +9,7 @@ import pprint
 import sys
 import functools
 import matplotlib.pyplot
+import pickle
 
 
 class Statistics:
@@ -145,6 +146,40 @@ class Statistics:
             k += 1
 
         return res
+
+    def cache_replays(self):
+        res = []
+
+        p = 0
+        i = 0
+
+        for f in self._replays:
+            if self._env['verbose']:
+                print("[%.2f] %s" % (i / len(self._replays) * 100, f))
+
+            res.append({
+                'fname': f,
+                'replay': self.parse_replay(f)
+            })
+
+            dump_threshold = 10
+            i += 1
+
+            if i == len(self._replays) - 1 or \
+                    1.0 * (i - p) / len(self._replays) * 100 > dump_threshold:
+                out_name = os.path.join(
+                    self._env['project_root'],
+                    'build', 'replays_%d_%d.dat' % (i, dump_threshold))
+
+                if self._env['verbose']:
+                    print('[] [dump] %s' % out_name)
+
+                with io.open(out_name, 'wb') as outf:
+                    pickle.dump(res, outf)
+                p = i
+
+                del res
+                res = []
 
     def draw_scores(self):
         out_dir = os.path.join(self._env['project_root'], 'build', 'scores')
