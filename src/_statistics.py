@@ -168,6 +168,7 @@ class Statistics:
             fig = matplotlib.pyplot.figure()
             matplotlib.pyplot.plot([x['frame']['score'] for x in r['entries']])
             fig.savefig(out_png)
+            matplotlib.pyplot.close(fig)
 
 
 class TestStatistics(unittest.TestCase):
