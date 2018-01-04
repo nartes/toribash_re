@@ -242,13 +242,20 @@ class Algos:
         self.run_lines(r"""
 aa
 db main
-dc
+        """, with_output=True)
+
+        while int(self.rctx.cmd("dr~eip[1]"), 16) > 0x90000000:
+            self.rctx.cmd("dc")
+
+        self.run_lines(r"""
 dm
         """, with_output=True)
 
+        assert self.rctx.cmd("dm~inject:0").find('-r-x') >= 0
+
         self.run_lines(r"""
-s `dm~inject:1[0]`
-/x 5589e55383ec14e8f7fe
+s `dm~inject:0[0]`
+/x 5589e55383
         """, with_output=True)
 
         assert int(self.rctx.cmd("f~hit[0]"), 16) > 0x60000000
@@ -265,15 +272,28 @@ ds 6
         """, with_output=True)
 
     def call_inject_2(self):
+        _old_cmd = self.rctx.cmdj("aoj @@ eip")[0]['bytes']
         self.run_lines(r"""
-wa jmp `f~sym.abc[0]`@@=eip
+wa call `f~sym.abc[0]`@@=eip
         """, with_output=True)
 
-        assert self.rctx.cmdj("aoj @@ eip")[0]['mnemonic'] == 'jmp'
+        assert self.rctx.cmdj("aoj @@ eip")[0]['mnemonic'] == 'call'
         assert self.rctx.cmdj("aoj @@ eip")[0]['jump'] == int(
             self.rctx.cmd("f~sym.abc[0]"), 16)
 
+        #_old_pos = int(self.rctx.cmd("dr~eip[1]"), 16)
+
+        _cur_pos = self.rctx.cmdj("aoj 2 @@ eip")[0]['addr']
+        _next_pos = self.rctx.cmdj("aoj 2 @@ eip")[1]['addr']
         self.rctx.cmd("s eip")
+        self.rctx.cmd("db %d" % _next_pos)
+        self.rctx.cmd("ds")
+        print(self.rctx.cmd("pd 10 @@ eip"))
+        self.rctx.cmd("dc")
+        assert int(self.rctx.cmd("dr~eip[1]"), 16) == _next_pos
+        #self.rctx.cmd("wx %s @@ %d" % (_old_cmd, _old_pos))
+        self.rctx.cmd("dr eip = %d" % _cur_pos)
+        self.rctx.cmd("wx %s @@ eip" % _old_cmd)
         self.rctx.cmd(".--")
 
     def af1d(self, fcn='man.toribash_core'):
@@ -590,66 +610,76 @@ class Tasks:
 
         self._stage_save('a')
 
-        for opt in ['-O0', '-O2', '-O3']:
-            for bit in [32, 64]:
-                _env = None
+        for abi in ['ms', 'sysv']:
+            for opt in ['-O0', '-O2', '-O3']:
+                for bit in [32, 64]:
+                    _env = None
 
-                self._stage_load('a')
+                    self._stage_load('a')
 
-                for t in ['custom_prefix', 'environment']:
-                    if self._stage_filter():
+                    for t in ['custom_prefix', 'environment']:
+                        if self._stage_filter():
+                            self._stage_step()
+                            continue
+
+                        _prefix = '%d_%s_%s' % (bit, opt[1:].lower(), abi)
+
+                        ret = self._sub_shell(r"""
+    cd $PROJECT_ROOT;
+    CC=clang CFLAGS="$OPT -g -mabi=$ABI -m$BIT" LDFLAGS="-mabi=$ABI -m$BIT"\
+        $PYTHON_EXECUTABLE $LUA_CLI -t $TASK {args};
+                            """.format(
+                            args=' '.join([
+                                self._options.verbose and '-V' or '',
+                                '--env=\'{env}\''.format(env=json.dumps({
+                                    'prefix': os.path.join(
+                                        self._env['project_root'], 'build', 'lua_' + _prefix
+                                    ),
+                                    'pkgname': 'lua_' + _prefix
+                                }))
+                            ])
+                        ),
+                            env={
+                                'bit': bit,
+                                'opt': opt,
+                                'abi': abi,
+                                'task': t
+                        },
+                            communicate=(t == 'environment')
+                        )
+
+                        if t == 'environment':
+                            _env = json.loads(ret)
+
                         self._stage_step()
-                        continue
 
-                    _prefix = '%d_%s' % (bit, opt[1:].lower())
-
-                    ret = self._sub_shell(r"""
-cd $PROJECT_ROOT;
-CC=clang CFLAGS="$OPT -g -m$BIT" LDFLAGS="-m$BIT"\
-    $PYTHON_EXECUTABLE $LUA_CLI -t $TASK {args};
-                        """.format(
-                        args=' '.join([
-                            self._options.verbose and '-V' or '',
-                            '--env=\'{env}\''.format(env=json.dumps({
-                                'prefix': os.path.join(
-                                    self._env['project_root'], 'build', 'lua_' + _prefix
-                                ),
-                                'pkgname': 'lua_' + _prefix
-                            }))
-                        ])
-                    ),
-                        env={
-                            'bit': bit,
-                            'opt': opt,
-                            'task': t
-                    },
-                        communicate=(t == 'environment')
-                    )
-
-                    if t == 'environment':
-                        _env = json.loads(ret)
+                    self._sub_shell(r"""
+    cd $PROJECT_ROOT;
+    export LD_LIBRARY_PATH=$_LD_LIBRARY_PATH:$LD_LIBRARY_PATH
+    export PKG_CONFIG_PATH=$_PKG_CONFIG_PATH:$PKG_CONFIG_PATH
+    $CC -g -mabi=$ABI -m$BIT $OPT\
+        -o build/lua_test_${_PREFIX}.o -c src/lua.cpp `pkg-config $PKGNAME --cflags`;
+    $CC -mabi=$ABI -m$BIT\
+        -o build/lua_test_${_PREFIX} build/lua_test_${_PREFIX}.o `pkg-config $PKGNAME --libs`;
+    $CC -mabi=$ABI -m$BIT\
+        -o build/lua_test_static_${_PREFIX}\
+        build/lua_test_${_PREFIX}.o `pkg-config --variable=static_libs $PKGNAME`;
+                        """,
+                                    env={
+                                        '_prefix':
+                                            '%d_%s_%s_%s' % (
+                                                bit, 'clang', opt[1:].lower(), abi),
+                                        'opt': opt,
+                                        'bit': bit,
+                                        'abi': abi,
+                                        'cc': 'clang',
+                                        '_ld_library_path': _env['ld_library_path'],
+                                        '_pkg_config_path': _env['pkg_config_path'],
+                                        'pkgname': _env['pkgname']
+                                    }
+                                    )
 
                     self._stage_step()
-
-                self._sub_shell(r"""
-cd $PROJECT_ROOT;
-export LD_LIBRARY_PATH=$_LD_LIBRARY_PATH:$LD_LIBRARY_PATH
-export PKG_CONFIG_PATH=$_PKG_CONFIG_PATH:$PKG_CONFIG_PATH
-$CC -g -m$BIT $OPT -o build/lua_test_${_PREFIX}.o -c src/lua.cpp `pkg-config $PKGNAME --cflags`;
-$CC -m$BIT -o build/lua_test_${_PREFIX} build/lua_test_${_PREFIX}.o `pkg-config $PKGNAME --libs`;
-$CC -m$BIT -o build/lua_test_static_${_PREFIX}\
-    build/lua_test_${_PREFIX}.o `pkg-config --variable=static_libs $PKGNAME`;
-                    """,
-                                env={
-                                    '_prefix': '%d_%s_%s' % (bit, 'clang', opt[1:].lower()),
-                                    'opt': opt,
-                                    'bit': bit,
-                                    'cc': 'clang',
-                                    '_ld_library_path': _env['ld_library_path'],
-                                    '_pkg_config_path': _env['pkg_config_path'],
-                                    'pkgname': _env['pkgname']
-                                }
-                                )
 
                 self._stage_step()
 
@@ -859,7 +889,7 @@ class Radare:
                                                   os.path.join(os.path.dirname(__file__), '..'))
 
         self._env['prefix'] = self._env.get('prefix',
-                                            os.path.join('..', 'radare2', 'tmp', 'install'))
+                                            os.path.join('deps', 'radare2', 'tmp', 'install'))
 
         self._env['path'] = self._join_paths(
             os.path.join(self._env['prefix'], 'bin'),

@@ -4,3 +4,6 @@
 [submodule "deps/radare2book"]
 	path = deps/radare2book
 	url = git@github.com:nartes/radare2book.git
+[submodule "deps/radare2"]
+	path = deps/radare2
+	url = git@github.com:nartes/radare2.git
