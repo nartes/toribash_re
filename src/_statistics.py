@@ -10,6 +10,8 @@ import sys
 import functools
 import matplotlib.pyplot
 import pickle
+import copy
+import tempfile
 
 
 class Statistics:
@@ -180,6 +182,95 @@ class Statistics:
 
                 del res
                 res = []
+
+    def helper(self, replays):
+        res = []
+
+        for r in replays:
+            res.append(
+                numpy.array(
+                    [e['frame']['raw'][1:] for e in r['replay']['entries']],
+                    dtype=numpy.int64
+                )
+            )
+
+        return res
+
+    def helper_2(self, scores):
+        return numpy.hstack([
+            numpy.max(scores[:, [0, 3]], axis=1).reshape(-1, 1),
+            numpy.max(scores[:, [1, 2]], axis=1).reshape(-1, 1)
+        ])
+
+    def helper_3(self, count=-1):
+        _files = []
+        b = []
+
+        __data = glob.glob('build/replays_*_*.dat')
+
+        if count == -1:
+            _data = __data
+        else:
+            _data = __data[:count]
+
+        for _f in _data:
+            a = pickle.load(io.open(_f, 'rb'))
+
+            _b = self.helper(a)
+
+            b.extend(copy.deepcopy(_b))
+
+            del _b
+
+            _files.extend([copy.deepcopy(x['fname']) for x in a])
+
+            del a
+
+        res = {
+            '_files': _files,
+            'b': b
+        }
+
+        _out_name = tempfile.mktemp(
+            dir='build', prefix='helper_3_', suffix='.dat')
+
+        if self._env['verbose']:
+            print('[Statistics] [helper_3] dump to %s' % _out_name)
+
+        with io.open(_out_name, 'wb') as outf:
+            pickle.dump(res, outf)
+
+        return res
+
+    def helper_4(self, _b, _files, _threshold=10 ** 4):
+        _i1 = [x.size > 0 and len(x.shape) ==
+               2 and x.shape[1] == 4 for x in _b]
+
+        b = [_b[k] for k in numpy.where(_i1)[0]]
+
+        #e = numpy.concatenate([numpy.array([0]), numpy.cumsum([x.shape[0] for x in b])])
+
+        #c = numpy.concatenate(b)
+        #h = numpy.max(c[:, :2], axis=1)
+
+        #i = numpy.where(h > _threshold)[0]
+        #j = numpy.unique([numpy.max(numpy.where(z >= e)[0]) for z in i])
+
+        s = numpy.array([numpy.max(x[-1, :]) for x in b])
+        j = numpy.where(s > _threshold)[0]
+
+        return {
+            'b': b,
+            '_i1': _i1,
+            's': s,
+            #'c': c,
+            #'h': h,
+            #'e': e,
+            #'i': i,
+            'j': j,
+            'f': _files,
+            'replays': '\n'.join([r'"' + os.path.split(_files[x])[1] + r'"' for x in j])
+        }
 
     def draw_scores(self):
         out_dir = os.path.join(self._env['project_root'], 'build', 'scores')
