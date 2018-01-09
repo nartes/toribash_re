@@ -866,7 +866,7 @@ class Radare:
 
         self.setup()
 
-        if self._options.task in ['run']:
+        if self._options.task in ['run', 'custom']:
             getattr(self, self._options.task)()
         else:
             raise ValueError('Unknown command %s' % ' '.join(args))
@@ -962,6 +962,12 @@ class Radare:
             len(self._rarun['params']
                 ) and r'-e "dbg.profile=$RR2PROFILE"' or ''
         ))
+
+    def custom(self):
+        self._sub_shell(r"""
+            {args};
+            """.replace('{args}', self._env['radare2_args'])
+                        )
 
 
 if __name__ == '__main__':
