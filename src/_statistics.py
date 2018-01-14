@@ -372,12 +372,12 @@ class Statistics:
         for fig in figs:
             fig.show()
 
-    def helper_10(self, a):
+    def helper_10(self, a, base_r_id=0):
         res = dict([(x, []) for x in
                     ['r_id', 'e_id', 'p_id', 'pos',
                      'action_states', 'action_ids', 'timestamp', 'score']])
 
-        r_id = 0
+        r_id = base_r_id
         for r in a:
             e_id = 0
             for e in r['replay']['entries']:
@@ -386,12 +386,19 @@ class Statistics:
                     res['r_id'].append(r_id)
                     res['e_id'].append(e_id)
                     res['p_id'].append(p_id)
-                    res['pos'].append(numpy.array(
-                        p['pos']['floats']).reshape(-1, 3))
-                    res['action_ids'].append(
-                        p.get('joint') and p['joint']['ids'] or [])
-                    res['action_states'].append(
-                        p.get('joint') and p['joint']['states'] or [])
+
+                    if p.get('pos') is not None:
+                        res['pos'].append(numpy.array(
+                            p['pos']['floats']).reshape(-1, 3))
+                    else:
+                        res['pos'].append([])
+                    if p.get('joint'):
+                        res['action_ids'].append(p['joint']['ids'])
+                        res['action_states'].append(p['joint']['states'])
+                    else:
+                        res['action_ids'].append([])
+                        res['action_states'].append([])
+
                     res['timestamp'].append(e['frame']['timestamp'])
                     res['score'].append(e['frame']['raw'][1:])
 
@@ -415,9 +422,10 @@ class Statistics:
     def minus_list(self, a, b):
         return [x for x in a if not x in b]
 
-    def helper_13(self, b):
+    def _helper_13(self, b):
         c = b
-        d = c[['pos', 'timestamp', 'e_id', 'r_id', 'p_id']]
+        _d = c[c['pos'].apply(len) != 0]
+        d = _d[['pos', 'timestamp', 'e_id', 'r_id', 'p_id']]
         e = d.assign(mean_pos=lambda x: x['pos'].apply(
             functools.partial(numpy.mean, axis=0)))
         z = {'r_id': [], 'p_id': [], 'e_id': [],
@@ -448,11 +456,53 @@ class Statistics:
             del g
 
         y = pandas.DataFrame.from_dict(z)
-        w = pandas.merge(b[self.minus_list(list(b.columns), ['timestamp'])], y,
+        w = pandas.merge(_d[self.minus_list(list(_d.columns), ['timestamp'])], y,
                          on=self.minus_list(list(y.columns), ['mean_pos', 'timestamp']), how='outer')
         u = w.sort_values(by=['r_id', 'e_id', 'p_id'])
 
         return u
+
+    def helper_13_merge_mean_pos(self, a):
+        b = a.sort_values(by=['r_id', 'e_id'])
+
+        b['mean_pos'] = list(numpy.mean(numpy.stack(b['pos'].values), axis=1))
+
+        c = a.groupby(['r_id', 'e_id'])[['r_id', 'e_id']].first().values
+
+        timestamp = a.groupby(['r_id', 'e_id'])['timestamp'].first().values
+
+        d = {'p_id': [], 'common_mean_pos': []}
+
+        assert b['p_id'].unique().size == 2
+
+        for p_id in b['p_id'].unique():
+            e = b[b['p_id'] == p_id][['mean_pos', 'timestamp']]
+            cur_mean_pos = numpy.stack(e['mean_pos'].values)
+            f = numpy.array([numpy.interp(timestamp, e['timestamp'].values, cur_mean_pos[:, k]) for k in
+                             range(cur_mean_pos.shape[-1])]).T
+            d['p_id'].append(numpy.array(
+                [p_id], dtype=numpy.uint8).repeat(f.shape[0]))
+            d['common_mean_pos'].extend(list(f))
+
+        g = pandas.DataFrame({
+            'r_id': c[:, 0].repeat(2).reshape(-1, 2).T.reshape(-1),
+            'e_id': c[:, 1].repeat(2).reshape(-1, 2).T.reshape(-1),
+            'p_id': numpy.concatenate(d['p_id']),
+            'mean_pos': d['common_mean_pos'],
+            'timestamp': timestamp.repeat(2).reshape(-1, 2).T.reshape(-1)
+        })
+
+        return pandas.merge(a[self.minus_list(a.columns, ['timestamp'])],
+                            g, on=['r_id', 'e_id', 'p_id'], how='right')
+
+    def helper_13(self, a):
+        a = a[a['p_id'] < 2]
+        a = a[a['pos'].apply(lambda x: isinstance(x, numpy.ndarray))]
+        a = a[a['score'].apply(lambda x: len(x)) == 4]
+
+        a = self.helper_13_merge_mean_pos(a)
+
+        return a
 
     def helper_14(self, b, p_id=0, r_id=0):
         pos = b[(b['r_id'] == r_id) & (b['p_id'] == p_id)]['mean_pos']
@@ -502,7 +552,7 @@ class Statistics:
         for r_id in c[(c['score'].apply(numpy.max) > 10 ** 5)]['r_id'].unique():
             self.helper_15(c, r_id=r_id)
 
-    def helper_19(self, c):
+    def _helper_19(self, c):
         res = {'r_id': [], 'distance': [], 'score': []}
         for r_id in c['r_id'].unique():
             res['r_id'].append(r_id)
@@ -518,6 +568,33 @@ class Statistics:
 
         return pandas.DataFrame(res)
 
+    def helper_19(self, a, **kwargs):
+        a = a.sort_values(by=['r_id', 'e_id', 'p_id'])
+
+        b = a[a['score'].notna()]
+        b['score'] = b['score'].apply(numpy.array)
+        c = b.groupby(['r_id']).agg({
+            'score': lambda x: numpy.max(numpy.stack(x)[:, :2].reshape(-1)),
+            'r_id': lambda x: x.values[0]
+        })
+
+        d = self.helper_19_distance(a, **kwargs)
+
+        return pandas.DataFrame({
+            'r_id': c['r_id'].values,
+            'score': c['score'].values,
+            'distance': d.values
+        })
+
+    def helper_19_distance(self, a, f=lambda x: x.mean()):
+        e = a.sort_values(by=['r_id', 'e_id', 'p_id']) \
+             .groupby(['r_id'])['mean_pos'] \
+             .apply(lambda x:
+                    f(numpy.sqrt(numpy.sum(numpy.square(numpy.diff(
+                        numpy.stack(x).reshape(-1, 2, 3), axis=1)), axis=-1)).squeeze()))
+
+        return e
+
     def helper_20(self):
         a = pickle.load(io.open("build/replays_1332_10.dat", 'rb'))
         b = _statistics.Statistics().helper_10(a)
@@ -525,6 +602,71 @@ class Statistics:
         e = _statistics.Statistics().helper_19(c)
         matplotlib.pyplot.scatter(e['distance'], e['score'])
         matplotlib.pyplot.show()
+
+    def helper_21(self, count=-1):
+        res = []
+
+        _data = sorted(glob.glob('build/replays_*_*.dat'))[:count]
+
+        base_r_id = 0
+
+        count = 0
+
+        def progress(_count, progr, state='start'):
+            print("[helper_21] %s #%d of %d, progress %.2f%%"
+                  % (state, _count, len(_data), 100.0 * (progr) / len(_data)))
+
+        for _f in _data:
+            progress(count + 1, count)
+            a = None
+
+            with io.open(_f, 'rb') as _inf:
+                a = pickle.load(_inf)
+
+            b = self.helper_10(a, base_r_id=base_r_id)
+
+            res.append(b)
+
+            base_r_id += b.index.size
+
+            del a
+
+            progress(count + 1, count + 1, state='end')
+
+            count += 1
+
+        return res
+
+    def helper_22(self, a):
+        for k in range(len(a)):
+            pickle.dump(a[k], io.open('build/p%d.dat' % k, 'wb'))
+
+    def helper_23(self):
+        a = []
+
+        for k in sorted([
+                int(re.compile(r'\d').search(x)[0]) for x in
+                glob.glob('build/p*.dat')]):
+            a.append(pickle.load(io.open('build/p%d.dat' % k, 'rb')))
+
+        return pandas.concat(a)
+
+    def helper_24(self, c):
+        figs = []
+
+        for f in [lambda x: x.max() - x.min(),
+                  lambda x: x.mean(),
+                  lambda x: x.min(),
+                  lambda x: x.max(),
+                  lambda x: numpy.max(numpy.abs(numpy.diff(x)))]:
+            d = self.helper_19(c, f=f)
+            fig = matplotlib.pyplot.figure()
+            ax = fig.add_subplot(111)
+            ax.scatter(d['distance'], d['score'])
+            figs.append(fig)
+
+        for f in figs:
+            f.show()
 
     def draw_scores(self):
         out_dir = os.path.join(self._env['project_root'], 'build', 'scores')
