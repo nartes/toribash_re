@@ -675,6 +675,101 @@ class Statistics:
         c = self.helper_13(b)
         self.helper_24(c)
 
+    def helper_26(self, n_samples):
+        samples = []
+
+        one = numpy.random.randint(0, 100, (n_samples, 2)) / 100.0
+        two = numpy.random.randint(0, 100, (n_samples, 2)) / 100.0
+
+        samples.append([one, two])
+
+        one = numpy.random.randint(0, 50, (n_samples, 2)) / 100.0
+        two = numpy.random.randint(50, 100, (n_samples, 2)) / 100.0
+
+        samples.append([one, two])
+
+        return samples
+
+    def helper_27(self, samples):
+        n_tries = 1000
+
+        one, two = samples
+
+        sep = numpy.random.randint(-50, 50, (n_tries, 2)) / 100.0
+        b = numpy.random.randint(-50, 50, (n_tries, 1)) / 100.0
+        z = numpy.stack(
+            [numpy.ones(n_tries), (b.squeeze() - sep[:, 0]) / sep[:, 1]]).T
+
+        dots = [sep.dot(one.T) + b - 1, sep.dot(two.T) + b + 1]
+
+        crit = [
+            numpy.sum(~(dots[0] >= 1e-6), axis=1) == 0,
+            numpy.sum(~(dots[1] <= -1e-6), axis=1) == 0
+        ]
+
+        score = numpy.logical_and(crit[0], crit[1])
+
+        norm = sep.dot(sep.T).diagonal()
+
+        fig1 = matplotlib.pyplot.figure()
+
+        ax1 = fig1.add_subplot(221)
+        ax1.plot(one[:, 0], one[:, 1], 'bo', two[:, 0], two[:, 1], 'rx')
+
+        ax2 = fig1.add_subplot(222)
+        ax2.plot(norm, 'x')
+
+        ax3 = fig1.add_subplot(223)
+        ax3.plot(numpy.int8(score) * 2 - 1, 'rx')
+
+        ax4 = fig1.add_subplot(224)
+        ax4.plot(b, 'o')
+
+        fig1.show()
+
+        t = pandas.DataFrame({
+            'sep': sep.tolist(),
+            'b': b.tolist(),
+            'z': z.tolist(),
+            'norm': norm,
+            'score': score
+        })
+
+        best = t[t['score'] == 1].sort_values(by=['norm']).head(5)
+
+        if best.index.size > 0:
+            _norm = numpy.stack(best['norm']).reshape(-1, 1)
+            _z = numpy.stack(best['z'].values)
+            _sep = numpy.stack(best['sep'].values) / numpy.sqrt(_norm)
+
+            fig2 = matplotlib.pyplot.figure()
+            ax2_1 = fig2.add_subplot(221)
+            ax2_1.plot(one[:, 0], one[:, 1], 'bo', two[:, 0], two[:, 1], 'rx')
+            ax2_1.plot(
+                numpy.stack([
+                    _z[:, 0],
+                    _z[:, 0] + _sep[:, 0],
+                    numpy.array([None, ]).repeat(_z.shape[0])
+                ]).T.reshape(-1),
+                numpy.stack([
+                    _z[:, 1],
+                    _z[:, 1] + _sep[:, 1],
+                    numpy.array([None, ]).repeat(_z.shape[0])
+                ]).T.reshape(-1),
+            )
+
+            ax2_2 = fig2.add_subplot(222)
+            ax2_2.plot(_norm.reshape(-1), 'x')
+
+            ax2_3 = fig2.add_subplot(223)
+            ax2_3.plot(_z[:, 0], _z[:, 1], 'x')
+
+            fig2.show()
+
+    def helper_28(self):
+        for s in self.helper_26(10):
+            self.helper_27(s)
+
     def draw_scores(self):
         out_dir = os.path.join(self._env['project_root'], 'build', 'scores')
         os.system('mkdir -p ' + out_dir)
