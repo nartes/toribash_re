@@ -597,9 +597,9 @@ class Statistics:
 
     def helper_20(self):
         a = pickle.load(io.open("build/replays_1332_10.dat", 'rb'))
-        b = _statistics.Statistics().helper_10(a)
-        c = _statistics.Statistics().helper_13(b)
-        e = _statistics.Statistics().helper_19(c)
+        b = self.helper_10(a)
+        c = self.helper_13(b)
+        e = self.helper_19(c)
         matplotlib.pyplot.scatter(e['distance'], e['score'])
         matplotlib.pyplot.show()
 
@@ -654,19 +654,26 @@ class Statistics:
     def helper_24(self, c):
         figs = []
 
-        for f in [lambda x: x.max() - x.min(),
-                  lambda x: x.mean(),
-                  lambda x: x.min(),
-                  lambda x: x.max(),
-                  lambda x: numpy.max(numpy.abs(numpy.diff(x)))]:
-            d = self.helper_19(c, f=f)
+        for _prefix, _func in [('max_minus_min', lambda x: x.max() - x.min()),
+                               ('mean', lambda x: x.mean()),
+                               ('min', lambda x: x.min()),
+                               ('max', lambda x: x.max()),
+                               ('max_diff', lambda x: numpy.max(numpy.abs(numpy.diff(x))))]:
+            d = self.helper_19(c, f=_func)
             fig = matplotlib.pyplot.figure()
             ax = fig.add_subplot(111)
             ax.scatter(d['distance'], d['score'])
-            figs.append(fig)
+            figs.append((_prefix, fig))
 
-        for f in figs:
+        for _prefix, f in figs:
+            f.savefig(tempfile.mktemp(
+                dir='build', prefix='helper_24_' + _prefix + '_', suffix='.svgz'))
             f.show()
+
+    def helper_25(self):
+        b = self.helper_23()
+        c = self.helper_13(b)
+        self.helper_24(c)
 
     def draw_scores(self):
         out_dir = os.path.join(self._env['project_root'], 'build', 'scores')
