@@ -690,27 +690,7 @@ class Statistics:
 
         return samples
 
-    def helper_27(self, samples):
-        n_tries = 1000
-
-        one, two = samples
-
-        sep = numpy.random.randint(-50, 50, (n_tries, 2)) / 100.0
-        b = numpy.random.randint(-50, 50, (n_tries, 1)) / 100.0
-        z = numpy.stack(
-            [numpy.ones(n_tries), (b.squeeze() - sep[:, 0]) / sep[:, 1]]).T
-
-        dots = [sep.dot(one.T) + b - 1, sep.dot(two.T) + b + 1]
-
-        crit = [
-            numpy.sum(~(dots[0] >= 1e-6), axis=1) == 0,
-            numpy.sum(~(dots[1] <= -1e-6), axis=1) == 0
-        ]
-
-        score = numpy.logical_and(crit[0], crit[1])
-
-        norm = sep.dot(sep.T).diagonal()
-
+    def helper_27_plot_all(self, one, two, sep, b, z, dots, crit, score, norm):
         fig1 = matplotlib.pyplot.figure()
 
         ax1 = fig1.add_subplot(221)
@@ -727,48 +707,181 @@ class Statistics:
 
         fig1.show()
 
-        t = pandas.DataFrame({
+    def helper_27_construct_sv(self, one, two, sep):
+        _one = sep.dot(one.T)
+        _two = sep.dot(two.T)
+
+        _best_one_i = [
+            numpy.where(_one[k, :] < numpy.min(_one[k, :]) + 1e-6)[0]
+            for k in range(_one.shape[0])
+        ]
+
+        _best_two_i = [
+            numpy.where(_two[k, :] > numpy.max(_two[k, :]) - 1e-6)[0]
+            for k in range(_two.shape[0])
+        ]
+
+        _best_one = one[[x[0] for x in _best_one_i]]
+        _best_two = two[[x[0] for x in _best_two_i]]
+
+        sep_norm = numpy.sqrt(numpy.sum(numpy.square(sep), axis=1))
+
+        _dist = (
+            numpy.array([a[x[0]] for a, x in zip(list(_one), _best_one_i)]) -
+            numpy.array([a[x[0]] for a, x in zip(list(_two), _best_two_i)])
+        ) / sep_norm
+
+        _sep = sep / sep_norm.reshape(-1, 1) * _dist.reshape(-1, 1)
+
+        z = _best_two + _sep / 2.0
+        w = 2.0 * sep / sep_norm.reshape(-1, 1) / _dist.reshape(-1, 1)
+        b = numpy.diag(-w.dot(z.T)).reshape(-1, 1)
+
+        return pandas.DataFrame({
+            'sep': list(w),
+            'b': list(b),
+            'z': list(z),
+            '_best_one_i': _best_one_i,
+            '_best_two_i': _best_two_i
+        })
+
+    def helper_27_decision_function(self, sep, z, b, samples):
+        return sep.dot(samples.T) + b
+
+    def helper_27_visualize(self, sep, z, b, samples):
+        xx, yy = numpy.meshgrid(
+            numpy.linspace(
+                numpy.min(samples[:, 0]) - 0.1, numpy.max(samples[:, 0]) + 0.1, 100),
+            numpy.linspace(
+                numpy.min(samples[:, 1]) - 0.1, numpy.max(samples[:, 1]) + 0.1, 100),
+        )
+        Z = self.helper_27_decision_function(sep, z, b, numpy.c_[xx.ravel(), yy.ravel()]) \
+            .reshape(xx.shape)
+
+        matplotlib.pyplot.imshow(
+            Z, interpolation='bilinear', origin='lower',
+            extent=(xx.min(), xx.max(), yy.min(), yy.max()), cmap='gray')
+
+        matplotlib.pyplot.contour(
+            xx, yy, Z, levels=[-1, 0, 1], linestyles=['--', '-', '--'], colors='k',
+            alpha=0.5)
+
+        matplotlib.pyplot.scatter(
+            samples[:, 0], samples[:, 1],
+            c=self.helper_27_decision_function(sep, z, b, samples) > 0, edgecolors='k')
+
+        matplotlib.pyplot.show()
+
+    def helper_27_search_dumb(self, one, two, n_tries=10):
+        _one_i = numpy.random.permutation(
+            numpy.arange(max(one.shape[0], n_tries)) % one.shape[0])[:n_tries]
+        _two_i = numpy.random.permutation(
+            numpy.arange(max(two.shape[0], n_tries)) % two.shape[0])[:n_tries]
+
+        _sep = one[_one_i] - two[_two_i]
+        return self.helper_27_construct_sv(one, two, _sep)[['sep', 'b', 'z']]
+
+    def helper_27_search_bs(self, one, two, n_tries):
+        sep = numpy.random.randint(-10 ** 5, 10 ** 5, (n_tries, 2)) / 100.0
+        #b = numpy.random.randint(-50, 50, (n_tries, 1)) / 100.0
+        b = numpy.array([1]).repeat(n_tries).reshape(-1, 1)
+        z = numpy.stack(
+            [numpy.ones(n_tries), (-b.squeeze() - sep[:, 0]) / sep[:, 1]]).T
+
+        return pandas.DataFrame({
             'sep': sep.tolist(),
-            'b': b.tolist(),
             'z': z.tolist(),
+            'b': b.tolist()
+        })
+
+    def helper_27_check(self, one, two, separators, plot_all=False):
+        sep = numpy.stack(separators['sep'].values)
+        b = numpy.stack(separators['b'].values)
+        z = numpy.stack(separators['z'].values)
+
+        dots = [sep.dot(one.T) + b - 1, sep.dot(two.T) + b + 1]
+
+        crit = [
+            numpy.sum(~(dots[0] >= -1e-3), axis=1) == 0,
+            numpy.sum(~(dots[1] <= 1e-3), axis=1) == 0
+        ]
+
+        score = numpy.logical_and(crit[0], crit[1])
+
+        norm = sep.dot(sep.T).diagonal()
+
+        if plot_all:
+            self.helper_27_plot_all(
+                one, two, sep, b, z, dots, crit, score, norm)
+
+        t = pandas.DataFrame({
+            'sep': list(sep),
+            'b': list(b),
+            'z': list(z),
             'norm': norm,
             'score': score
         })
 
-        best = t[t['score'] == 1].sort_values(by=['norm']).head(5)
+        return t[t['score'] == 1].sort_values(by=['norm']).head(5)
 
-        if best.index.size > 0:
-            _norm = numpy.stack(best['norm']).reshape(-1, 1)
-            _z = numpy.stack(best['z'].values)
-            _sep = numpy.stack(best['sep'].values) / numpy.sqrt(_norm)
+    def helper_27_search(self, one, two, n_tries, hints, plot_all=False):
+        separators = pandas.concat([
+            self.helper_27_search_dumb(one, two),
+            self.helper_27_search_bs(one, two, n_tries)
+        ])
 
-            fig2 = matplotlib.pyplot.figure()
-            ax2_1 = fig2.add_subplot(221)
-            ax2_1.plot(one[:, 0], one[:, 1], 'bo', two[:, 0], two[:, 1], 'rx')
-            ax2_1.plot(
-                numpy.stack([
-                    _z[:, 0],
-                    _z[:, 0] + _sep[:, 0],
-                    numpy.array([None, ]).repeat(_z.shape[0])
-                ]).T.reshape(-1),
-                numpy.stack([
-                    _z[:, 1],
-                    _z[:, 1] + _sep[:, 1],
-                    numpy.array([None, ]).repeat(_z.shape[0])
-                ]).T.reshape(-1),
+        sep = numpy.stack(separators['sep'].values)
+        b = numpy.stack(separators['b'].values)
+        z = numpy.stack(separators['z'].values)
+
+        if len(hints) > 0:
+            sep = numpy.concatenate([sep, hints[0]])
+            b = numpy.concatenate([b, hints[1]])
+            z = numpy.concatenate([z, hints[2]])
+
+        return self.helper_27_check(
+            one,
+            two,
+            pandas.DataFrame({
+                'sep': list(sep),
+                'z': list(z),
+                'b': list(b)
+            }),
+            plot_all=plot_all
+        )
+
+    def helper_27(self, samples, n_tries=10 ** 5, hints=[], **kwargs):
+        one, two = samples
+
+        batch_size = max(n_tries // 1000, 100)
+
+        best = None
+
+        for k in range((n_tries + batch_size - 1) // batch_size):
+            r = self.helper_27_search(
+                one,
+                two,
+                min(batch_size, n_tries - batch_size * k),
+                hints=hints,
+                **kwargs
             )
 
-            ax2_2 = fig2.add_subplot(222)
-            ax2_2.plot(_norm.reshape(-1), 'x')
+            if best is None:
+                best = r
+            else:
+                best.append(r)
 
-            ax2_3 = fig2.add_subplot(223)
-            ax2_3.plot(_z[:, 0], _z[:, 1], 'x')
+        if best.index.size > 0:
+            self.helper_27_visualize(
+                best['sep'].values[0],
+                best['z'].values[0],
+                best['b'].values[0],
+                numpy.concatenate([one, two])
+            )
 
-            fig2.show()
-
-    def helper_28(self):
-        for s in self.helper_26(10):
-            self.helper_27(s)
+    def helper_28(self, n_tries=10 ** 2, n_samples=10 ** 1):
+        for s in self.helper_26(n_samples):
+            self.helper_27(s, n_tries=n_tries)
 
     def draw_scores(self):
         out_dir = os.path.join(self._env['project_root'], 'build', 'scores')
@@ -833,6 +946,13 @@ class TestStatistics(unittest.TestCase):
                             )
                         )
 
+    def test_dumb_search_separates(self):
+        s = Statistics()
+
+        ss = s.helper_26(10)[1]
+        sp = s.helper_27_search_dumb(*ss)
+        self.assertGreater(s.helper_27_check(*ss, sp).index.size, 0)
+
 
 def unittest_main_wrapper(argv=sys.argv):
     class DebugRunner:
@@ -841,7 +961,7 @@ def unittest_main_wrapper(argv=sys.argv):
 
         def run(self, test):
             a = unittest.TextTestRunner()
-            test(a._makeResult(), debug=True)
+            return test(a._makeResult(), debug=True)
 
     _testRunner = None
     _argv = argv.copy()
