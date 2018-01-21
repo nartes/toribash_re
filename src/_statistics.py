@@ -883,6 +883,65 @@ class Statistics:
         for s in self.helper_26(n_samples):
             self.helper_27(s, n_tries=n_tries)
 
+    def helper_29_sample_for_perceptron(self, seed=0):
+        numpy.random.seed(seed)
+        X = numpy.random.rand(100, 2)
+
+        phi = numpy.random.rand(2)
+        phi /= numpy.sqrt(numpy.sum(numpy.square(phi)))
+
+        dist = (numpy.random.rand(1) - 0.2) / 0.8 + 0.1
+
+        phi /= dist
+
+        b = numpy.array([0.5, 0.5])
+
+        Y = (phi.dot(X.T) - phi.dot(b) > 0.0).reshape(-1)
+
+        return X, Y
+
+    def helper_29_perceptron(self, X, Y, iter_tol=10 ** 6):
+        w = numpy.zeros(X.shape[1] + 1)
+        n = X.shape[0]
+
+        l = 0
+        for k in range(iter_tol):
+            xhi = numpy.append(X[k % n, :], 1)
+            y = int(Y[k % n]) * 2 - 1
+
+            d = y * w.dot(xhi.T) * xhi
+
+            w[d <= 0] = (w + y * xhi.T)[d <= 0]
+            l += 1
+
+        return w[:2], w[2], l
+
+    def helper_29(self, iter_tol=10 ** 5):
+        X, Y = self.helper_29_sample_for_perceptron(seed=234)
+        w, b, l = self.helper_29_perceptron(X, Y, iter_tol=iter_tol)
+        self.helper_29_visualize(w, b, X, Y)
+
+    def helper_29_visualize(self, w, b, X, Y):
+        xx, yy = numpy.meshgrid(
+            numpy.linspace(
+                -0.1 + numpy.min(X[:, 0]), 0.1 + numpy.max(X[:, 0])),
+            numpy.linspace(
+                -0.1 + numpy.min(X[:, 1]), 0.1 + numpy.max(X[:, 1]))
+        )
+        Z = (w.dot(numpy.c_[xx.ravel(), yy.ravel()].T) + b).reshape(xx.shape)
+
+        matplotlib.pyplot.imshow(
+            Z, interpolation='bilinear', origin='lower',
+            extent=(xx.min(), xx.max(), yy.min(), yy.max()), cmap='gray')
+
+        matplotlib.pyplot.contour(
+            xx, yy, Z, levels=[-1, 0, 1], linestyles=['--', '-', '--'], colors='k',
+            alpha=0.5)
+
+        matplotlib.pyplot.scatter(
+            X[:, 0], X[:, 1],
+            c=Y, edgecolors='k')
+
     def draw_scores(self):
         out_dir = os.path.join(self._env['project_root'], 'build', 'scores')
         os.system('mkdir -p ' + out_dir)
