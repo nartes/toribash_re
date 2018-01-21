@@ -883,50 +883,104 @@ class Statistics:
         for s in self.helper_26(n_samples):
             self.helper_27(s, n_tries=n_tries)
 
-    def helper_29_sample_for_perceptron(self, seed=0):
-        numpy.random.seed(seed)
-        X = numpy.random.rand(100, 2)
+    def helper_29_sample_for_perceptron(
+        self,
+        dist=None,
+    ):
+        if dist is None:
+            dist = (numpy.random.rand(1)[0] * 0.8 + 0.1) / 2
 
-        phi = numpy.random.rand(2)
+        phi = numpy.random.rand(2) * 2 - 1
         phi /= numpy.sqrt(numpy.sum(numpy.square(phi)))
-
-        dist = (numpy.random.rand(1) - 0.2) / 0.8 + 0.1
 
         phi /= dist
 
-        b = numpy.array([0.5, 0.5])
+        b = -phi.dot(numpy.array([0.5, 0.5]).T)
 
-        Y = (phi.dot(X.T) - phi.dot(b) > 0.0).reshape(-1)
+        X = None
+        Y = None
 
-        return X, Y
+        while X is None or X.shape[0] < 100:
+            _X = numpy.random.rand(1000, 2) * 3 - 1
 
-    def helper_29_perceptron(self, X, Y, iter_tol=10 ** 6):
-        w = numpy.zeros(X.shape[1] + 1)
+            _Y = (phi.dot(_X.T) + b).reshape(-1)
+
+            _i = numpy.abs(_Y) >= 1.0
+
+            _Y = _Y > 0
+
+            if numpy.sum(_i) > 0:
+                if X is None:
+                    X = _X[_i]
+                else:
+                    X = numpy.vstack(X, _X[_i])
+
+                if Y is None:
+                    Y = _Y[_i]
+                else:
+                    Y = numpy.vstack(Y, _Y[_i])
+
+        return X[:100], Y[:100], dist, phi, b
+
+    def helper_29_perceptron(
+            self,
+            X,
+            Y,
+            iter_tol=10 ** 6,
+            plambda=1,
+            stopping_rule=lambda p: False):
         n = X.shape[0]
 
+        _j = numpy.random.permutation(
+            numpy.arange(max(n, iter_tol))[:iter_tol] % n)
+
+        w = numpy.zeros(X.shape[1] + 1)
+
         l = 0
+        m = 0
         for k in range(iter_tol):
-            xhi = numpy.append(X[k % n, :], 1)
-            y = int(Y[k % n]) * 2 - 1
+            xhi = numpy.append(X[_j[k] % n, :], plambda)
+            y = numpy.double(Y[_j[k] % n]) * 2.0 - 1
 
-            d = y * w.dot(xhi.T) * xhi
+            d = y * w.dot(xhi.T)
+            _i = d <= +1e-6
 
-            w[d <= 0] = (w + y * xhi.T)[d <= 0]
+            _w = w
+            if numpy.sum(_i) > 0:
+                _w[_i] = (w + y * xhi.T)[_i]
+                m += 1
+
+            if stopping_rule({
+                'k': k,
+                'j': _j[k],
+                'l': l,
+                'n': n,
+                'a': numpy.sum(_i) == 0,
+                'X': X,
+                'Y': Y,
+                'm': m,
+                'w': w
+            }):
+                break
+
+            w = _w
             l += 1
 
-        return w[:2], w[2], l
+        return w[:2], w[2], l, m
 
-    def helper_29(self, iter_tol=10 ** 5):
-        X, Y = self.helper_29_sample_for_perceptron(seed=234)
-        w, b, l = self.helper_29_perceptron(X, Y, iter_tol=iter_tol)
+    def helper_29(self, iter_tol=10 ** 5, plambda=1):
+        X, Y = self.helper_29_sample_for_perceptron()[:2]
+        w, b, l = self.helper_29_perceptron(
+            X, Y, iter_tol=iter_tol, plambda=plambda)[:3]
+        pprint.pprint({'w': w, 'b': b, 'l': l})
         self.helper_29_visualize(w, b, X, Y)
 
     def helper_29_visualize(self, w, b, X, Y):
         xx, yy = numpy.meshgrid(
             numpy.linspace(
-                -0.1 + numpy.min(X[:, 0]), 0.1 + numpy.max(X[:, 0])),
+                -0.1 + numpy.min(X[:, 0]), 0.1 + numpy.max(X[:, 0]), 1000),
             numpy.linspace(
-                -0.1 + numpy.min(X[:, 1]), 0.1 + numpy.max(X[:, 1]))
+                -0.1 + numpy.min(X[:, 1]), 0.1 + numpy.max(X[:, 1]), 1000)
         )
         Z = (w.dot(numpy.c_[xx.ravel(), yy.ravel()].T) + b).reshape(xx.shape)
 
@@ -941,6 +995,84 @@ class Statistics:
         matplotlib.pyplot.scatter(
             X[:, 0], X[:, 1],
             c=Y, edgecolors='k')
+
+    def helper_30(self):
+        plambda = None
+        X, Y, dist, phi = [None, ] * 4
+        n = None
+        _X = None
+        D = None
+        rho = None
+        M = None
+        m_l = None
+        m_m = None
+        m_w = None
+        m_b = None
+        w, b, l, m = [None, ] * 4
+        zz = None
+
+        while True:
+            plambda = 1
+
+            X, Y, dist, phi, b = self.helper_29_sample_for_perceptron()
+
+            n = X.shape[0]
+
+            _X = numpy.hstack([X, plambda * numpy.ones((X.shape[0], 1))])
+            D = numpy.sqrt(numpy.max(numpy.sum(numpy.square(_X), axis=1)))
+            rho = dist
+
+            M = numpy.int(numpy.square(D / rho))
+
+            m_l = None
+            m_m = None
+            m_w = None
+            m_b = None
+
+            def stopping_rule(p):
+                nonlocal m_m
+                nonlocal m_l
+                nonlocal m_w
+                nonlocal m_b
+
+                if p['m'] > M and m_m is None:
+                    m_l = p['l']
+                    m_m = p['m']
+                    m_w = p['w'][:2].copy()
+                    m_b = p['w'][2].copy()
+
+                return False
+
+            w, b, l, m = self.helper_29_perceptron(
+                X,
+                Y,
+                iter_tol=10 ** 5,
+                stopping_rule=stopping_rule,
+                plambda=plambda)
+
+            zz = (numpy.double(Y) * 2 - 1) * \
+                (numpy.double(w).dot(numpy.double(X).T) + numpy.double(b))
+            pprint.pprint(zz)
+
+            if numpy.sum(~(Y * (w.dot(X.T) + b) > -1e+6)) > 0:
+                break
+
+            break
+
+        pprint.pprint({'M': M, 'D': D, 'rho': rho})
+        pprint.pprint({
+            'w': w, 'b': b, 'l': l, 'm': m, 'n': n, 'g': l < n})
+
+        matplotlib.pyplot.subplot(121)
+
+        if m_m is not None:
+            pprint.pprint({
+                'm_m': m_m, 'm_l': m_l, 'm_w': m_w, 'm_b': m_b})
+            self.helper_29_visualize(m_w, m_b, X, Y)
+
+        matplotlib.pyplot.subplot(122)
+        self.helper_29_visualize(w, b, X, Y)
+        matplotlib.pyplot.show()
 
     def draw_scores(self):
         out_dir = os.path.join(self._env['project_root'], 'build', 'scores')
