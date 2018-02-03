@@ -996,7 +996,7 @@ class Statistics:
             X[:, 0], X[:, 1],
             c=Y, edgecolors='k')
 
-    def helper_30(self):
+    def helper_30(self, iter_tol=10 ** 5):
         plambda = None
         X, Y, dist, phi = [None, ] * 4
         n = None
@@ -1035,7 +1035,8 @@ class Statistics:
                 nonlocal m_w
                 nonlocal m_b
 
-                if p['m'] > M and m_m is None:
+                if p['m'] >= M and m_m is None:
+                    print(M, p['m'])
                     m_l = p['l']
                     m_m = p['m']
                     m_w = p['w'][:2].copy()
@@ -1046,7 +1047,7 @@ class Statistics:
             w, b, l, m = self.helper_29_perceptron(
                 X,
                 Y,
-                iter_tol=10 ** 5,
+                iter_tol=iter_tol,
                 stopping_rule=stopping_rule,
                 plambda=plambda)
 
