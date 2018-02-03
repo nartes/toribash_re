@@ -20,12 +20,36 @@ inject: src/mylib/inject.cpp
 	$$PYTHON_EXECUTABLE src/toribash_rarun.py \
 		radare2 -t custom --args="r2 -qc \"oo+; wx 07 @@=0x4c 0x6c\" build/inject.so";\
 
+patch_toribash_init:
+	mkdir -p build/patch_toribash &&\
+	cd build/patch_toribash &&\
+	cmake ../../src/patch_toribash
+
+patch_toribash_build:
+	cd build/patch_toribash &&\
+	make -j3 VERBOSE=1
+	$$PYTHON_EXECUTABLE src/toribash_rarun.py \
+	  radare2 -t custom \
+	  --args="r2 -qc \"oo+; wx 07 @@=0x4c 0x6c\" build/patch_toribash/libpatch_toribash.so";
+	mkdir -p build/patch_toribash/dummy_libs
+	cp build/patch_toribash/libdummy.so build/patch_toribash/dummy_libs/libsteam_api.so
+
+
 run_lua_test:
 	export DEBUG_PROGRAM=$$PWD/build/lua_test_32_clang_o0_ms;\
 	LD_LIBRARY_PATH=$$PWD/build/lua_32_o0_ms/lib:$$LD_LIBRARY_PATH \
 	$$PYTHON_EXECUTABLE src/toribash_rarun.py \
 	radare2 \
 	--rarun='{"setenv": "LD_PRELOAD=${PWD}/build/inject.so", "program": "$$DEBUG_PROGRAM"}' \
+	--cmds=".:12345" --args='-d $$DEBUG_PROGRAM' -V
+
+run_toribash:
+	export DEBUG_PROGRAM=$$PWD/build/toribash/toribash_steam; \
+	LD_LIBRARY_PATH=$$PWD/build/patch_toribash/dummy_libs:$$LD_LIBRARY_PATH \
+	export INJECT_SO=${PWD}/build/patch_toribash/libpatch_toribash.so; \
+	$$PYTHON_EXECUTABLE src/toribash_rarun.py \
+	radare2 \
+	--rarun='{"setenv": "LD_PRELOAD='$$INJECT_SO'", "program": "$$DEBUG_PROGRAM"}' \
 	--cmds=".:12345" --args='-d $$DEBUG_PROGRAM' -V
 
 src/mylib/inject.cpp: src/mylib/inject.hpp
