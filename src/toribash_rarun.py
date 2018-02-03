@@ -251,7 +251,7 @@ db main
 dm
         """, with_output=True)
 
-        assert self.rctx.cmd("dm~inject:0").find('-r-x') >= 0
+        assert self.rctx.cmd("dm~inject:0").find('-rwx') >= 0
 
         self.run_lines(r"""
 s `dm~inject:0[0]`
