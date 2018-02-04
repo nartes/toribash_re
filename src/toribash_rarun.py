@@ -11,6 +11,7 @@ import optparse
 import json
 import pprint
 import glob
+import re
 
 
 os.environ['TORIBASH_PROJECT_ROOT'] =\
@@ -295,6 +296,15 @@ wa call `f~sym.abc[0]`@@=eip
         self.rctx.cmd("dr eip = %d" % _cur_pos)
         self.rctx.cmd("wx %s @@ eip" % _old_cmd)
         self.rctx.cmd(".--")
+
+    def toribash_set_b_for_steam_api(self):
+        # TODO(radare): it doesn't accept ~<prefix>*
+        # what it does accept is ~<prefix>, the star is not parsed,
+        # it may be presumed to stay there.
+
+        #for s in re.compile(r'[\s\n\r]+').split(self.rctx.cmd("f~sym.imp.Steam*[2]")):
+        for s in re.compile(r'[\s\n\r]+').split(self.rctx.cmd("f~sym.imp.Steam[2]")):
+            self.rctx.cmd("db %s" % s)
 
     def af1d(self, fcn='man.toribash_core'):
         refs = [r['addr']
