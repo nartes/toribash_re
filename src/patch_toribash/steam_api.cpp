@@ -1,13 +1,37 @@
 #include "steam_api.h"
+#include <cstdio>
+
+typedef union c_steam_id_t {
+	unsigned long long all_bits;
+} c_steam_id_s;
 
 bool SteamAPI_Init()
 {
 	return true;
 }
 
+char * i_steam_friends_vm_1c(c_steam_id_s c)
+{
+	static char user_name[1024];
+
+	snprintf(user_name, 0x40, "%s", "tori_good");
+
+	return user_name;
+}
+
 void * SteamFriends()
 {
-	return 0;
+	typedef struct i_steam_friends_t {
+		void * i_steam_friends[0x1c / 4 + 1];
+	} i_steam_friends_s;
+
+	static i_steam_friends_s f;
+
+	f.i_steam_friends[0x1c / 4] = reinterpret_cast<void *>(&i_steam_friends_vm_1c);
+
+	static void * f_ptr = reinterpret_cast<void *>(&f);
+
+	return reinterpret_cast<void *>(&f_ptr);
 }
 
 bool SteamAPI_RestartAppIfNecessary()
@@ -49,11 +73,6 @@ bool i_steam_user_b_logged_on(void * p_this)
 {
 	return true;
 }
-
-typedef union c_steam_id_t {
-	unsigned long long all_bits;
-} c_steam_id_s;
-
 
 c_steam_id_s i_steam_user_get_steam_id()
 {

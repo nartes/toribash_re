@@ -45,11 +45,12 @@ run_lua_test:
 
 run_toribash:
 	export DEBUG_PROGRAM=$$PWD/build/toribash/toribash_steam; \
+	export DEBUG_CHDIR=$$PWD/build/toribash/; \
 	LD_LIBRARY_PATH=$$PWD/build/patch_toribash/dummy_libs:$$LD_LIBRARY_PATH \
 	export INJECT_SO=${PWD}/build/patch_toribash/libpatch_toribash.so; \
 	$$PYTHON_EXECUTABLE src/toribash_rarun.py \
 	radare2 \
-	--rarun='{"setenv": "LD_PRELOAD='$$INJECT_SO'", "program": "$$DEBUG_PROGRAM"}' \
+	--rarun='{"setenv": "LD_PRELOAD='$$INJECT_SO'", "chdir": "'$$DEBUG_CHDIR'", "program": "$$DEBUG_PROGRAM"}' \
 	--cmds=".:12345" --args='-d $$DEBUG_PROGRAM' -V
 
 src/mylib/inject.cpp: src/mylib/inject.hpp
