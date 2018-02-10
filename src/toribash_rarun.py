@@ -225,7 +225,7 @@ class Algos:
             af man.steam_init @ 0x81fae20
             afr man.steam_callbacks @ 0x081fdf10
             af @ 0x080c0bf0
-            af man.toribash_core @ 0x080b4d10
+            afr man.toribash_core @ 0x080b4d10
             af @ 0x080c0c50
             af man.gl_init @ 0x080ea3c0
             af man.lua_init @ 0x080fda40
@@ -235,6 +235,7 @@ class Algos:
             afr man.toribash_login_init @ 0x80914a0
             afr man.toribash_entry1 @ 0x80b49b0
             afr man.toribash_steam_hell @ 0x81fb620
+            af man.toribash_steam_hell_prelude @ 0x080c0448
 
             #0x083b8000 lua static code
             #0x083bb770 lua stack cmd

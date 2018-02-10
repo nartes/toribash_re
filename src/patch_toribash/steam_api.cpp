@@ -47,13 +47,26 @@ void * SteamNetworking()
 {
 	typedef struct i_steam_networking_t {
 		void * vptr;
-		void * vmethods[0x28 / 4 + 1];
-		static void method_28(struct i_steam_networking_t * _this) {
-			int a = 0;
+		void * vmethods[0x8 / 4 + 1];
+		static bool p2p_packet_available(
+			struct i_steam_networking_t * _this,
+			unsigned int * p_cub_msg_size,
+			int n_channel) {
+			return false;
+		}
+		static bool read_p2p_packet(
+			struct i_steam_networking_t * _this,
+			void * pub_dest,
+			unsigned int cub_dest,
+			unsigned int * p_cub_msg_size,
+			c_steam_id_s * p_steam_id_remote,
+			int n_channel) {
+			return false;
 		}
 		i_steam_networking_t() {
 			vptr = reinterpret_cast<void *>(&vmethods);
-			vmethods[0x28/4] = reinterpret_cast<void *>(&method_28);
+			vmethods[0x4/4] = reinterpret_cast<void *>(&p2p_packet_available);
+			vmethods[0x8/4] = reinterpret_cast<void *>(&read_p2p_packet);
 		}
 	} i_steam_networking_s;
 
