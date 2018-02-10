@@ -45,7 +45,21 @@ void SteamAPI_Shutdown()
 
 void * SteamNetworking()
 {
-	return 0;
+	typedef struct i_steam_networking_t {
+		void * vptr;
+		void * vmethods[0x28 / 4 + 1];
+		static void method_28(struct i_steam_networking_t * _this) {
+			int a = 0;
+		}
+		i_steam_networking_t() {
+			vptr = reinterpret_cast<void *>(&vmethods);
+			vmethods[0x28/4] = reinterpret_cast<void *>(&method_28);
+		}
+	} i_steam_networking_s;
+
+	static i_steam_networking_s sn;
+
+	return reinterpret_cast<void *>(&sn);
 }
 
 void SteamAPI_RegisterCallback(void * p_callback, int i_callback)

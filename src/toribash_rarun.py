@@ -218,12 +218,12 @@ class Algos:
             else:
                 print("Ignored: %s" % l)
 
-    def manual_functions(self):
+    def toribash_manual_functions(self):
         self.run_lines(r"""
             af man.steam_init_v2 @ 0x081fb240
             af man.steam_networking @ 0x081fb590
             af man.steam_init @ 0x81fae20
-            afr man.steam_callbacks @ fcn.081fdf10
+            afr man.steam_callbacks @ 0x081fdf10
             af @ 0x080c0bf0
             af man.toribash_core @ 0x080b4d10
             af @ 0x080c0c50
@@ -232,11 +232,34 @@ class Algos:
             af @ 0x081046d0
             af @ 0x081fcd90
             af @ 0x081fce00
+            afr man.toribash_login_init @ 0x80914a0
+            afr man.toribash_entry1 @ 0x80b49b0
+            afr man.toribash_steam_hell @ 0x81fb620
 
             #0x083b8000 lua static code
             #0x083bb770 lua stack cmd
             #0x083bb390 lua stack cmd
             #0x080fdf00 population of lua functions
+        """)
+
+        self.rctx.cmd("af man.steam_class_init @ 0x081fdf10")
+
+    def toribash_search_string_usage(self):
+        assert int(self.rctx.cmd("f~retrie:0[0]"), 16) == 0x847d38c
+
+        self.run_lines(r"""
+            s 0x847d38c
+            /x 8cd34708
+        """)
+
+        assert int(self.rctx.cmd("f~hit[0]").split('\n')[-1], 16) == 0x80915d8
+
+        self.rctx.cmd("f man.print_unable_login @ 0x80915d5")
+
+        self.run_lines(r"""
+            fs searches
+            f-*
+            fs *
         """)
 
     def call_inject(self):
