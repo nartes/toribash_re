@@ -136,7 +136,25 @@ void  SteamAPI_RunCallbacks()
 
 void * SteamUtils()
 {
-	return 0;
+	typedef struct i_steam_utils_t
+	{
+		void * vptr;
+		void * vmethods[0x44 / 4 + 1];
+		static bool is_overlay_enabled(
+			struct i_steam_utils_t * _this
+			)
+		{
+			return false;
+		}
+		i_steam_utils_t() {
+			vptr = reinterpret_cast<void *>(&vmethods);
+			vmethods[0x44/4] = reinterpret_cast<void *>(&is_overlay_enabled);
+		}
+	} i_steam_utils_s;
+
+	static i_steam_utils_s su;
+
+	return reinterpret_cast<void *>(&su);
 }
 
 void * SteamUserStats()
