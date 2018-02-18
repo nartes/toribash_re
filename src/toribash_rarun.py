@@ -11,6 +11,7 @@ import optparse
 import json
 import pprint
 import glob
+import numpy
 import re
 
 
@@ -223,20 +224,65 @@ class Algos:
             af man.steam_init_v2 @ 0x081fb240
             af man.steam_networking @ 0x081fb590
             af man.steam_init @ 0x81fae20
-            afr man.steam_callbacks @ 0x081fdf10
+            af man.steam_callbacks @ 0x081fdf10
             af @ 0x080c0bf0
-            afr man.toribash_core @ 0x080b4d10
+            af man.toribash_core @ 0x080b4d10
             af @ 0x080c0c50
             af man.gl_init @ 0x080ea3c0
             af man.lua_init @ 0x080fda40
             af @ 0x081046d0
             af @ 0x081fcd90
             af @ 0x081fce00
-            afr man.toribash_login_init @ 0x80914a0
-            afr man.toribash_entry1 @ 0x80b49b0
-            afr man.toribash_steam_hell @ 0x81fb620
-            af man.toribash_steam_hell_prelude @ 0x080c0448
+            af man.toribash_login_init @ 0x80914a0
+            af man.toribash_entry1 @ 0x80b49b0
+            af man.toribash_steam_hell @ 0x81fb620
+            afr man.toribash_steam_hell_prelude @ 0x080c0448
+            af man.curl_related_logic @ 0x8105940
+            af man.curl_related_logic_2 @ 0x81f5ab0
+            af man.curl_related_logic_3 @ 0x81f6510
+            af man.curl_related_logic_4 @ 0x81f54d0
 
+            af man.curl_related_logic_4_1 @ 0x81f54d0
+            af man.curl_related_logic_4_2 @ 0x80c0100
+            #af man.curl_related_logic_4_2 @ 0x80b9000
+            #afr man.curl_related_logic_4_3 @ 0x80bd790
+""" +
+
+                       # hit breakpoint at: 81f54d0
+                       #:> dbt
+                       # 0  0x81f54d0  sp: 0x0         0    [man.curl_related_logic_4]  man.curl_related_logic_4 man.curl_related_logic_40
+                       # 1  0x80b9230  sp: 0xffd689fc  0    [??]  fcn.080b5980+14512
+                       # 2  0x80bd790  sp: 0xffd68a1c  32   [??]  loc.080b9ab0+15584
+                       # 3  0xf7d19146 sp: 0xffd68a34  24   [??]  section_end..bss-295031030
+                       # 4  0xf7e5b19b sp: 0xffd68a38  4    [??]  section_end..bss-293712033
+                       # 5  0x80c01b4  sp: 0xffd68a4c  20   [fcn.080c0100]  fcn.080c0100+180
+                       # 6  0x80c04b4  sp: 0xffd68a8c  64   [man.toribash_steam_hell_prelude]  man.toribash_steam_hell_prelude+108
+                       # 7  0x80c15c0  sp: 0xffd68abc  48   [fcn.080c1590]  fcn.080c1590+48
+                       # 8  0xf7bd4abc sp: 0xffd68ac0  4    [??]  section_end..bss-296359808
+                       # 9  0x80b51f5  sp: 0xffd68acc  12   [man.toribash_core]  man.toribash_core+1253
+                       # 10  0xf7928bf9 sp: 0xffd68bd8  268  [??]  section_end..bss-299161155
+                       # 11  0xf792a930 sp: 0xffd68bec  20   [??]  section_end..bss-299153676
+                       # 12  0xf7fbb2b0 sp: 0xffd68bf0  4    [??]  eip+83536
+                       # 13  0xf792a8c9 sp: 0xffd68bf8  8    [??]  section_end..bss-299153779
+
+                       #:> dbt
+                       # 0  0x80b9000  sp: 0x0         0    [man.curl_related_logic_4_2]  man.curl_related_logic_4_2 man.curl_related_logic_4_20
+                       # 1  0xf7c61146 sp: 0xff9205a4  8    [??]  section_end..bss-295784694
+                       # 2  0xf7da319b sp: 0xff9205a8  4    [??]  section_end..bss-294465697
+                       # 3  0x80c01b4  sp: 0xff9205bc  20   [fcn.080c0100]  fcn.080c0100+180
+                       # 4  0x80c04b4  sp: 0xff9205fc  64   [man.toribash_steam_hell_prelude]  man.toribash_steam_hell_prelude+108
+                       # 5  0x80c15c0  sp: 0xff92062c  48   [??]  fcn.080c0c50+2416
+                       # 6  0xf7b1cabc sp: 0xff920630  4    [??]  section_end..bss-297113472
+                       # 7  0x80b51f5  sp: 0xff92063c  12   [man.toribash_core]  man.toribash_core+1253
+                       # 8  0xf7870bf9 sp: 0xff920748  268  [??]  section_end..bss-299914819
+                       # 9  0xf7872930 sp: 0xff92075c  20   [??]  section_end..bss-299907340
+                       # 10  0xf7f032b0 sp: 0xff920760  4    [??]  map.usr_lib32_ld_2.26.so._r_x+86704
+                       # 11  0xf78728c9 sp: 0xff920768  8    [??]  section_end..bss-299907443
+                       # 12  0xf7f032b0 sp: 0xff920784  28   [??]  map.usr_lib32_ld_2.26.so._r_x+86704
+                       # 13  0xf7b1cabc sp: 0xff920790  12   [??]  section_end..bss-297113472
+
+
+                       r"""
             #0x083b8000 lua static code
             #0x083bb770 lua stack cmd
             #0x083bb390 lua stack cmd
@@ -244,6 +290,64 @@ class Algos:
         """)
 
         self.rctx.cmd("af man.steam_class_init @ 0x081fdf10")
+
+    def random_walker(self):
+        freq_stat = {}
+
+        self.run_lines("aa")
+
+        for f in self.rctx.cmd("f~sym.imp[2]").split('\n'):
+            self.run_lines("db @@=%s" % f)
+
+        while True:
+            self.rctx.cmd("ds %d" % numpy.random.randint(1, 10 ** 3 + 1, 1))
+
+            dr = self.rctx.cmdj("drj")
+            print('\n'.join(["% 10s %10x" % (r, v) for r, v in dr.items()]))
+
+            # TODO: I'm in an incredible pain! pdj 10 @ eip does something wrong
+            # and radare doesn't crash. Seems eip has some meaning as a flag or symbol
+            def my_pd(cmd_s="pdj 10 @ `eip`"):
+                asm_l = self.rctx.cmdj(cmd_s)
+                print('\n'.join([
+                    "%10x %s" % (o['offset'], o['opcode']) for o in asm_l
+                ]))
+            # my_pd()
+            my_pd(cmd_s="pdj 10 @r:eip")
+            #print(self.rctx.cmd("pd 10 @ eip"))
+            #my_pd(cmd_s="pdj 10 @r,eip")
+
+            def update_freqs():
+                for k in dr:
+                    freq_stat[k] = freq_stat.get(k, {})
+                    freq_stat[k][dr[k]] = freq_stat[k].get(dr[k], 0) + 1
+
+            update_freqs()
+
+            def entropy(b):
+                b = b / (numpy.sum(b) + 1e-6)
+                b = numpy.maximum(b, 1e-6)
+                return numpy.sum(numpy.log(1 / (1 - b)) * (1 - b) + numpy.log(1 / (b)) * b)
+
+            # for k in freq_stat.keys():
+            def plot_freqs(key_list=['eip']):
+                for k in key_list:
+                    h = numpy.histogram(list(freq_stat[k].keys()), weights=list(
+                        freq_stat[k].values()), bins=10)
+                    print("%s entropy: %10f" % (k, entropy(h[0])))
+                    print(
+                        ' '.join(['%10.2f' % o for o in h[0] / numpy.sum(h[0])]))
+                    print(' '.join(['%10x' % o for o in numpy.uint64(h[1])]))
+
+                    if entropy(h[0]) < 1.0:
+                        if numpy.random.randint(0, 2):
+                            self.rctx.cmd("dc")
+
+            plot_freqs()
+
+            print(self.rctx.cmd("dbt~:[1]"))
+
+            os.system("sleep 1")
 
     def toribash_search_string_usage(self):
         assert int(self.rctx.cmd("f~retrie:0[0]"), 16) == 0x847d38c
@@ -326,7 +430,7 @@ wa call `f~sym.abc[0]`@@=eip
         # what it does accept is ~<prefix>, the star is not parsed,
         # it may be presumed to stay there.
 
-        #for s in re.compile(r'[\s\n\r]+').split(self.rctx.cmd("f~sym.imp.Steam*[2]")):
+        # for s in re.compile(r'[\s\n\r]+').split(self.rctx.cmd("f~sym.imp.Steam*[2]")):
         for s in re.compile(r'[\s\n\r]+').split(self.rctx.cmd("f~sym.imp.Steam[2]")):
             self.rctx.cmd("db %s" % s)
 
@@ -393,6 +497,105 @@ wa call `f~sym.abc[0]`@@=eip
         self.af1d()
         self.test()
         self.kill_server()
+
+
+class RandomWalker:
+    def __init__(self):
+        self.algos = Algos()
+
+    def perceptions(self):
+        res = {}
+
+        bt = self.algos.rctx.cmdj("dbtj")
+
+        res['bt'] = bt
+
+        # res['backtrace'] = {
+        #    'offsets': self.algos.rctx.cmd("dbt~:[1]")
+        #}
+        #res['backtrace']['len'] = len(res['backtrace']['offsets'])
+
+        regs = self.algos.rctx.cmdj("drj")
+
+        res['regs'] = regs
+
+        ops = self.algos.rctx.cmdj("aoj 10 @r:eip")
+
+        res['ops'] = ops
+
+        return res
+
+    def actuators(self):
+        def ds(num=1):
+            assert num > 0
+            self.algos.rctx.cmd("ds %d" % num)
+
+        def dso(num):
+            assert num > 0
+            self.algos.rctx.cmd("dso %d" % num)
+
+        def dcs(num):
+            assert num > 0
+            self.algos.rctx.cmd("dcs %d" % num)
+
+        def dcr():
+            self.algos.rctx.cmd("dcr")
+
+        def dcf():
+            self.algos.rctx.cmd("dcf")
+
+        def dcc():
+            self.algos.rctx.cmd("dcc")
+
+        res = {}
+
+        #res[0] = [dcf, dcc, dcr]
+        #res[0] = [dcf]
+        res[0] = [ds]
+        #res[1] = [dso, ds, dcs]
+        res[1] = [dso, ds]
+
+        return res
+
+    def trace(self):
+        drs = self.algos.rctx.cmd("dr")
+        pds = self.algos.rctx.cmd("pd 10 @r:eip")
+        dbts = self.algos.rctx.cmd("dbt")
+
+        print(drs)
+        print("  " + pds)
+        print(dbts)
+
+    def utility(self):
+        return 0
+
+    def model(self):
+        perc = self.perceptions()
+        actrs = self.actuators()
+
+        n1 = numpy.random.randint(0, len(actrs), 1)[0]
+
+        if n1 == 0:
+            n2 = numpy.random.randint(0, len(actrs[n1]), 1)[0]
+            actrs[n1][n2]()
+        elif n1 == 1:
+            n2 = numpy.random.randint(0, len(actrs[n1]), 1)[0]
+            #n3 = numpy.random.randint(0, 10 ** 3, 1)[0]
+            n3 = numpy.random.randint(1, 11, 1)[0]
+
+            actrs[n1][n2](n3)
+
+    def run(self):
+        k = 1
+        while True:
+            k += 1
+
+            self.model()
+
+            # if k % 100:
+            #    self.trace()
+
+            self.trace()
 
 
 class TestJobsProcessor(unittest.TestCase):
@@ -919,6 +1122,8 @@ class Radare:
             list(json.loads(self._options.env).items())
         ]))
 
+        self._env['r2_valgrind'] = self._env.get('r2_valgrind', '')
+
         self._env['project_root'] = self._env.get('project_root',
                                                   os.path.join(os.path.dirname(__file__), '..'))
 
@@ -989,13 +1194,15 @@ class Radare:
 
     def run(self):
         self._sub_shell(r"""
-            r2 {rarun} -c ".!cat $R2CMDS" {args};
-            """.replace('{args}', self._env['radare2_args'])
-                        .replace(
-            '{rarun}',
-            len(self._rarun['params']
-                ) and r'-e "dbg.profile=$RR2PROFILE"' or ''
-        ))
+            {valgrind} r2 {rarun} -c ".!cat $R2CMDS" {args};
+            """.replace(
+            '{args}', self._env['radare2_args'])
+            .replace(
+                '{rarun}',
+                len(self._rarun['params']) and r'-e "dbg.profile=$RR2PROFILE"' or '')
+            .replace(
+                '{valgrind}',
+                len(self._env['r2_valgrind']) and r'valgrind --vgdb-stop-at=startup' or ''))
 
     def custom(self):
         self._sub_shell(r"""
@@ -1044,6 +1251,8 @@ if __name__ == '__main__':
 
         if len(sys.argv) == 3:
             getattr(algos, sys.argv[2])()
+    elif 'rw' == sys.argv[1]:
+        RandomWalker().run()
     elif 'make' == sys.argv[1]:
         Tasks(sys.argv[2:])
     elif 'unit_test' == sys.argv[1]:
