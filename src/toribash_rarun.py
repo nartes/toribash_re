@@ -13,6 +13,9 @@ import pprint
 import glob
 import numpy
 import re
+import scipy.stats
+import threading
+import signal
 
 
 os.environ['TORIBASH_PROJECT_ROOT'] =\
@@ -191,15 +194,69 @@ os.environ['radare2_tcp_port'] = os.environ.get('radare2_tcp_port') or '9997'
 class Rctx:
     def __init__(self, url):
         self.url = url
+        self.timeout_error = False
 
-    def _ctx(self):
-        return r2pipe.open(self.url)
+    @staticmethod
+    def query(cmds, attr, url, e, q, l):
+        try:
+            res = getattr(r2pipe.open(url), attr)(cmds)
+            if not e.is_set():
+                l.acquire()
+                q.put(res)
+                e.set()
+                l.release()
+        except:
+            return None
 
-    def cmd(self, cmds):
-        return self._ctx().cmd(cmds)
+    @staticmethod
+    def wait(e, q, l, timeout):
+        os.system("sleep %d" % timeout)
+        if not e.is_set():
+            l.acquire()
+            q.put(None)
+            e.set()
+            l.release()
 
-    def cmdj(self, cmds):
-        return self._ctx().cmdj(cmds)
+    def timeout_cmd(self, cmds, attr, timeout):
+        q = multiprocessing.Queue()
+        l = multiprocessing.Lock()
+        e = multiprocessing.Event()
+
+        query_process = multiprocessing.Process(
+            target=functools.partial(
+                self.query,
+                cmds,
+                attr,
+                self.url,
+                e,
+                q,
+                l))
+
+        wait_process = multiprocessing.Process(
+            target=functools.partial(
+                self.wait,
+                e, q, l, timeout))
+
+        wait_process.start()
+        query_process.start()
+
+        e.wait()
+
+        res = q.get()
+
+        if res is None:
+            self.timeout_error = True
+
+        os.kill(wait_process.pid, signal.SIGKILL)
+        os.kill(query_process.pid, signal.SIGKILL)
+
+        return res
+
+    def cmd(self, cmds, timeout=0.5):
+        return self.timeout_cmd(cmds, attr='cmd', timeout=timeout)
+
+    def cmdj(self, cmds, timeout=0.5):
+        return self.timeout_cmd(cmds, attr='cmdj', timeout=timeout)
 
 
 class Algos:
@@ -207,13 +264,13 @@ class Algos:
         self.rctx = Rctx("tcp://127.0.0.1:%s" % os.environ['radare2_tcp_port'])
         #self.rctx = r2pipe.open("http://127.0.0.1:%s" % os.environ['radare2_http_port'])
 
-    def run_lines(self, cmds, with_output=False):
+    def run_lines(self, cmds, with_output=False, **kwargs):
         for l in cmds.split('\n'):
             l = l.strip()
 
             if l and not l.startswith('#'):
                 print("Consequent command: %s" % l)
-                ret = self.rctx.cmd(l)
+                ret = self.rctx.cmd(l, **kwargs)
                 if with_output:
                     print(ret)
             else:
@@ -502,6 +559,9 @@ wa call `f~sym.abc[0]`@@=eip
 class RandomWalker:
     def __init__(self):
         self.algos = Algos()
+        self.log_ = tempfile.mktemp(
+            dir='build', prefix='rw-log-', suffix='.json')
+        pprint.pprint({'log_': self.log_})
 
     def perceptions(self):
         res = {}
@@ -523,69 +583,123 @@ class RandomWalker:
 
         res['ops'] = ops
 
+        errs = {'timeout_error': self.algos.rctx.timeout_error}
+        res['errs'] = errs
+
+        self.algos.rctx.timeout_error = False
+
+        log_s = json.dumps(res)
+
+        with io.open(self.log_, 'a+') as _f:
+            _f.write(u'' + log_s + '\n')
+
+        print(log_s)
+
         return res
 
     def actuators(self):
-        def ds(num=1):
+        def ds_0(timeout):
+            ds(1, timeout=timeout)
+
+        def ds(num, timeout):
             assert num > 0
-            self.algos.rctx.cmd("ds %d" % num)
+            self.algos.run_lines("ds %d" % num, timeout=timeout)
 
-        def dso(num):
+        def dso(num, timeout):
             assert num > 0
-            self.algos.rctx.cmd("dso %d" % num)
+            self.algos.run_lines("dso %d" % num, timeout=timeout)
 
-        def dcs(num):
+        def dcs(num, timeout):
             assert num > 0
-            self.algos.rctx.cmd("dcs %d" % num)
+            self.algos.run_lines("dcs %d" % num, timeout=timeout)
 
-        def dcr():
-            self.algos.rctx.cmd("dcr")
+        def dcr(timeout):
+            self.algos.run_lines("dcr", timeout=timeout)
 
-        def dcf():
-            self.algos.rctx.cmd("dcf")
+        def dcf(timeout):
+            self.algos.run_lines("dcf", timeout=timeout)
 
-        def dcc():
-            self.algos.rctx.cmd("dcc")
+        def dcc(timeout):
+            self.algos.run_lines("dcc", timeout=timeout)
+
+        def kill_toribash(timeout):
+            cmd_ = "pkill toribash_steam"
+            print("Consequent command: %s" % cmd_)
+            os.system(cmd_)
+
+        def ood(timeout):
+            self.algos.rctx.cmd("ood", timeout=timeout)
 
         res = {}
 
         #res[0] = [dcf, dcc, dcr]
         #res[0] = [dcf]
-        res[0] = [ds]
+        #res[0] = [ds_0, dcf, dcc, dcr, kill_toribash, ood]
+        res[0] = [ds_0, ds_0, ds_0, ds_0, kill_toribash, ood]
         #res[1] = [dso, ds, dcs]
-        res[1] = [dso, ds]
+        res[1] = [dso, ds, ds]
 
         return res
 
     def trace(self):
-        drs = self.algos.rctx.cmd("dr")
-        pds = self.algos.rctx.cmd("pd 10 @r:eip")
-        dbts = self.algos.rctx.cmd("dbt")
+        #self.algos.rctx.timeout_error = False
+        # self.algos.rctx.cmd("?")
 
-        print(drs)
-        print("  " + pds)
-        print(dbts)
+        # if not self.algos.rctx.timeout_error:
+        drs = self.algos.rctx.cmd("dr", timeout=1)
+        pds = self.algos.rctx.cmd("pd 10 @r:eip", timeout=1)
+        dbts = self.algos.rctx.cmd("dbt", timeout=1)
+
+        if drs is not None and pds is not None and dbts is not None:
+            print(drs)
+            print("  " + pds)
+            print(dbts)
 
     def utility(self):
         return 0
+
+    def train(self):
+        if not hasattr(self, 'model_'):
+            self.model_ = {}
+
+            self.model_['params'] = {
+                1: [numpy.ones(2) / 2.0, numpy.arange(2)],
+                2: [numpy.ones(6) / 6.0, numpy.arange(6)],
+                3: [numpy.ones(3) / 3.0, numpy.arange(3)],
+                4: [numpy.ones(10 ** 3) / (10 ** 3), 1 + numpy.arange(10 ** 3)],
+                5: [numpy.ones(1) / 1.0, numpy.array([0.5])],
+            }
+
+            self.model_['generators'] = {
+                1: scipy.stats.rv_discrete(name='custom', values=(self.model_['params'][1][::-1])),
+                2: scipy.stats.rv_discrete(name='custom', values=(self.model_['params'][2][::-1])),
+                3: scipy.stats.rv_discrete(name='custom', values=(self.model_['params'][3][::-1])),
+                4: scipy.stats.rv_discrete(name='custom', values=(self.model_['params'][4][::-1])),
+                5: scipy.stats.rv_discrete(name='custom', values=(self.model_['params'][5][::-1])),
+            }
 
     def model(self):
         perc = self.perceptions()
         actrs = self.actuators()
 
-        n1 = numpy.random.randint(0, len(actrs), 1)[0]
+        n = [r.rvs(size=1)[0] for r in self.model_['generators'].values()]
+
+        n1 = n[0]
+        n5 = n[4]
 
         if n1 == 0:
-            n2 = numpy.random.randint(0, len(actrs[n1]), 1)[0]
-            actrs[n1][n2]()
+            n2 = n[1]
+            actrs[n1][n2](n5)
         elif n1 == 1:
-            n2 = numpy.random.randint(0, len(actrs[n1]), 1)[0]
+            n3 = n[2]
             #n3 = numpy.random.randint(0, 10 ** 3, 1)[0]
-            n3 = numpy.random.randint(1, 11, 1)[0]
+            n4 = n[3]
 
-            actrs[n1][n2](n3)
+            actrs[n1][n3](n4, n5)
 
     def run(self):
+        self.train()
+
         k = 1
         while True:
             k += 1
