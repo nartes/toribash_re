@@ -566,7 +566,7 @@ class RandomWalker:
     def perceptions(self):
         res = {}
 
-        bt = self.algos.rctx.cmdj("dbtj")
+        bt = self.algos.rctx.cmdj("dbtj", timeout=1)
 
         res['bt'] = bt
 
@@ -575,11 +575,11 @@ class RandomWalker:
         #}
         #res['backtrace']['len'] = len(res['backtrace']['offsets'])
 
-        regs = self.algos.rctx.cmdj("drj")
+        regs = self.algos.rctx.cmdj("drj", timeout=1)
 
         res['regs'] = regs
 
-        ops = self.algos.rctx.cmdj("aoj 10 @r:eip")
+        ops = self.algos.rctx.cmdj("aoj 10 @r:eip", timeout=1)
 
         res['ops'] = ops
 
@@ -598,36 +598,61 @@ class RandomWalker:
         return res
 
     def actuators(self):
+        def log_action(actn):
+            with io.open(self.log_, 'a+') as _f:
+                _f.write(u'' + json.dumps(actn) + '\n')
+
         def ds_0(timeout):
+            log_action({'act': 'ds_0', 'timeout': float(timeout)})
+
             ds(1, timeout=timeout)
 
         def ds(num, timeout):
+            log_action({'act': 'ds', 'timeout': float(timeout)})
+
             assert num > 0
             self.algos.run_lines("ds %d" % num, timeout=timeout)
 
         def dso(num, timeout):
+            log_action({'act': 'dso', 'num': int(
+                num), 'timeout': float(timeout)})
+
             assert num > 0
             self.algos.run_lines("dso %d" % num, timeout=timeout)
 
         def dcs(num, timeout):
+            log_action({'act': 'dcs', 'num': int(
+                num), 'timeout': float(timeout)})
+
             assert num > 0
             self.algos.run_lines("dcs %d" % num, timeout=timeout)
 
         def dcr(timeout):
+            log_action({'act': 'dcr', 'timeout': float(timeout)})
+
             self.algos.run_lines("dcr", timeout=timeout)
 
         def dcf(timeout):
+            log_action({'act': 'dcf', 'timeout': float(timeout)})
+
             self.algos.run_lines("dcf", timeout=timeout)
 
         def dcc(timeout):
+            log_action({'act': 'dcc', 'timeout': float(timeout)})
+
             self.algos.run_lines("dcc", timeout=timeout)
 
         def kill_toribash(timeout):
+            log_action({'act': 'kill toribash_steam',
+                        'timeout': float(timeout)})
+
             cmd_ = "pkill toribash_steam"
             print("Consequent command: %s" % cmd_)
             os.system(cmd_)
 
         def ood(timeout):
+            log_action({'act': 'ood', 'timeout': float(timeout)})
+
             self.algos.rctx.cmd("ood", timeout=timeout)
 
         res = {}
@@ -667,7 +692,7 @@ class RandomWalker:
                 2: [numpy.ones(6) / 6.0, numpy.arange(6)],
                 3: [numpy.ones(3) / 3.0, numpy.arange(3)],
                 4: [numpy.ones(10 ** 3) / (10 ** 3), 1 + numpy.arange(10 ** 3)],
-                5: [numpy.ones(1) / 1.0, numpy.array([0.5])],
+                5: [numpy.ones(1) / 1.0, numpy.array([1.0])],
             }
 
             self.model_['generators'] = {

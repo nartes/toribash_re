@@ -1075,6 +1075,42 @@ class Statistics:
         self.helper_29_visualize(w, b, X, Y)
         matplotlib.pyplot.show()
 
+    def helper_31_read_json_logs(self):
+        fl = sorted(glob.glob('build/rw*.json'),
+                    key=lambda f: os.stat(f).st_ctime)
+        d = [json.loads(s) for s in io.open(
+            fl[-1], 'r').read().split('\n') if len(s) > 0]
+
+        return fl, d
+
+    def helper_31_proc_to_pandas(self, fl, d):
+        d_ = [{'index': i, 'o': o} for i, o in zip(range(len(d)), d)]
+
+        perc = [o for o in d_ if o['o'].get('regs') is not None]
+        regs = []
+        for o in perc:
+            regs.append(o['o']['regs'])
+            regs[-1]['index'] = o['index']
+
+        p_regs = pandas.DataFrame(regs)
+
+        ops = []
+        for o in perc:
+            for c in o['o']['ops']:
+                ops.append({
+                    'bytes': c['bytes'], 'opcode': c['opcode'], 'index': o['index']})
+
+        p_ops = pandas.DataFrame(ops)
+
+        res = {
+            'perc': perc, 'regs': regs, 'p_regs': p_regs, 'p_ops': p_ops
+        }
+
+        pprint.pprint(dict([(k, res[k].head(10))
+                            for k in ['p_regs', 'p_ops']]))
+
+        return res
+
     def draw_scores(self):
         out_dir = os.path.join(self._env['project_root'], 'build', 'scores')
         os.system('mkdir -p ' + out_dir)
