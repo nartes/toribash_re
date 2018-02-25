@@ -51,6 +51,6 @@ run_toribash:
 	$$PYTHON_EXECUTABLE src/toribash_rarun.py \
 	radare2 \
 	--rarun='{"setenv": "LD_PRELOAD='$$INJECT_SO'", "chdir": "'$$DEBUG_CHDIR'", "program": "$$DEBUG_PROGRAM"}' \
-	--cmds=".:12345" --args='-d $$DEBUG_PROGRAM' -V
+	--tcp_server_port 12345 --args='-d $$DEBUG_PROGRAM' -V
 
 src/mylib/inject.cpp: src/mylib/inject.hpp
