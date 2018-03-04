@@ -16,6 +16,8 @@ import re
 import scipy.stats
 import threading
 import signal
+import pandas
+import _statistics
 
 
 os.environ['TORIBASH_PROJECT_ROOT'] =\
@@ -24,29 +26,13 @@ os.environ['TORIBASH_PROJECT_ROOT'] =\
 
 
 os.environ['R2_PIPE_GIT'] = os.path.join(
-    os.environ['TORIBASH_PROJECT_ROOT'], '..', 'radare2-r2pipe', 'python')
+    os.environ['TORIBASH_PROJECT_ROOT'], 'deps', 'radare2-r2pipe', 'python')
 
 os.environ['RPDB_GIT'] = os.path.join(
     os.environ['TORIBASH_PROJECT_ROOT'], '..', 'rpdb')
 
 os.environ['AUTOPEP8_BINARY'] = os.environ.get('AUTOPEP8_BINARY') or\
     sys.executable + " -m autopep8"
-
-os.environ['RADARE2_GIT'] = os.environ.get('RADARE2_GIT') or\
-    os.path.join(
-        os.environ['TORIBASH_PROJECT_ROOT'], '..', 'radare2', 'tmp',
-        'install')
-
-if not os.path.exists(os.environ['RADARE2_GIT']):
-    raise ValueError("Can not find GIT radare2 installation:\n%s" %
-                     os.environ['RADARE2_GIT'])
-else:
-    os.environ['PATH'] = os.path.join(os.environ['RADARE2_GIT'], 'bin') +\
-        os.path.pathsep + (os.environ.get('PATH') or '')
-
-    os.environ['LD_LIBRARY_PATH'] = os.path.join(os.environ['RADARE2_GIT'], 'lib') +\
-        os.path.pathsep + (os.environ.get('LD_LIBRARY_PATH') or '')
-
 
 for p, e in [(os.environ['R2_PIPE_GIT'], 'Warning: not found GIT r2pipe'),
              (os.environ['RPDB_GIT'], 'Warning: not found GIT rpdb')]:
@@ -559,23 +545,184 @@ wa call `f~sym.abc[0]`@@=eip
 class RandomWalker:
     def __init__(self):
         self.algos = Algos()
+
         self.log_ = tempfile.mktemp(
             dir='build', prefix='rw-log-', suffix='.json')
+
         pprint.pprint({'log_': self.log_})
 
-    def perceptions(self):
+    def trace_debug_output(self):
+        if self.internal_state['history']['p_eps'] is not None:
+            print(self.internal_state['history']['p_eps'][-10:])
+
+        drs = self.algos.rctx.cmd("dr", timeout=1)
+        pds = self.algos.rctx.cmd("pd 10 @r:eip", timeout=1)
+        dbts = self.algos.rctx.cmd("dbt", timeout=1)
+
+        if drs is not None and pds is not None and dbts is not None:
+            print(drs)
+            print("  " + pds)
+            print(dbts)
+
+    def trace_log(self, data=None, data_type=None):
+        assert data is not None
+        assert data_type is not None
+
+        with io.open(self.log_, 'a+') as _f:
+            log_s = u''
+
+            log_s += json.dumps(data)
+
+            if data_type in ['perceptions', 'actions']:
+                self.index += 1
+                data['index'] = self.index
+
+            self.internal_state['history']['logging']['_last_data_type'] = data_type
+
+            if data_type == 'perceptions':
+                self.internal_state['history']['logging']['_last_perceptions'] = data
+            elif data_type == 'actions':
+                self.internal_state['history']['logging']['_last_actions'] = data
+
+            _f.write(log_s + '\n')
+
+            print(log_s)
+
+    def statistics_update_perceptions_history(self):
+        assert self.internal_state['history']['logging']['_last_data_type'] == 'perceptions'
+
+        last_perceptions = self.internal_state['history']['logging']['_last_actions']
+
+        l = None
+        if last_perceptions['regs'] is not None:
+            l_ = last_perceptions['regs']
+            if not isinstance(l_, list):
+                l_ = [l_]
+
+            l = pandas.DataFrame(l_)
+            l['index'] = last_perceptions['index']
+
+        if l is not None:
+            if self.internal_state['history']['p_regs'] is None:
+                self.internal_state['history']['p_regs'] = l
+            else:
+                self.internal_state['history']['p_regs'] = \
+                    pandas.concat([self.internal_state['history']['p_regs'], l])
+
+        if self.internal_state['history']['p_regs'] is not None:
+            eps_ = {}
+
+            for r in ['eip']:
+                def entropy(a):
+                    a = numpy.maximum(a, 1e-6)
+                    a /= numpy.sum(a)
+                    return numpy.sum(a * numpy.log(1 / a) + (1 - a) * numpy.log(1 / (1 - a)))
+
+                eps_[r] = [
+                    entropy(numpy.histogram(
+                        self.internal_state['history']['p_regs'][r].values, bins=10)[0])]
+
+            if self.internal_state['history']['p_eps'] is None:
+                self.internal_state['history']['p_eps'] = pandas.DataFrame(eps_)
+            else:
+                self.internal_state['history']['p_eps'] = \
+                    pandas.concat([ \
+                        self.internal_state['history']['p_eps'],
+                        pandas.DataFrame(eps_)])
+
+    def statistics_update_acts_history(self):
+        assert self.internal_state['history']['logging']['_last_data_type'] == 'actions'
+
+        last_actions = self.internal_state['history']['logging']['_last_actions']
+
+        l = None
+        if last_actions['act'] is not None:
+            l_ = dict([(k, [v]) for k, v in last_actions.items() \
+                if k in ['act', 'num', 'index']])
+
+            l = pandas.DataFrame(l_)
+            l['index'] = last_actions['index']
+
+        if l is not None:
+            if self.internal_state['history']['p_acts'] is None:
+                self.internal_state['history']['p_acts'] = l
+            else:
+                self.internal_state['history']['p_acts'] = \
+                    pandas.concat([self.internal_state['history']['p_acts'], l])
+
+    def perceptron_batch_train(self):
+        assert self.internal_state['history']['logging']['_last_data_type'] == 'perceptions'
+
+        prev_index = self.p_regs.iloc[-2]['index']
+        cur_index = self.p_regs.iloc[-1]['index']
+
+        acts_table = pandas.DataFrame(
+            {'act': pandas.unique(self.p_acts['act'].sort_values().values)})
+        acts_table['index'] = acts_table.index
+
+        cur_acts = self.p_acts[self.p_acts['index'] > prev_index]
+        if not 'num'  in cur_acts.columns:
+            cur_acts['num'] = -1
+
+        d_e = numpy.diff(self.p_eps['eip'].iloc[-2:].values)
+
+        d_regs_columns = [c for c in self.p_regs.columns if not c in ['index']]
+        d_regs = pandas.DataFrame(
+            numpy.diff(self.p_regs.iloc[-2:][d_regs_columns].values, axis=0),
+            columns=['d_' + str(c) for c in d_regs_columns])
+
+        u = numpy.sum(d_e > 1e-6) + numpy.sum(numpy.abs(d_regs.values) < 1e-6)
+
+        cur_acts['cmd_id'] = pandas.merge(
+            cur_acts[['act']], acts_table, how='left', on=['act'])['index'].values
+
+        cur_acts.loc[cur_acts['num'].isna(), 'num'] = -1
+
+        samples = pandas.DataFrame({
+            'cmd_id': cur_acts['cmd_id'].values,
+            'args_0_num': cur_acts['num'].values,
+            'index': cur_acts['index'].values
+        })
+
+        samples = samples.join(
+            self.p_regs[d_regs_columns] \
+                .iloc[-numpy.ones(samples.shape[0])] \
+                .reset_index(drop=True))
+
+        samples = samples.join(
+            d_regs.iloc[numpy.zeros(samples.shape[0])] \
+            .reset_index(drop=True))
+
+        Y = numpy.repeat((u > 1) * 2 - 1, samples.shape[0])
+
+        print(samples)
+
+        if self.p_acts_perceptron_w is None:
+            self.p_acts_perceptron_w = numpy.zeros(len(samples.columns) + 1)
+
+        X = samples.assign(__offset__=1).values
+
+        _statistics.Statistics().helper_31_perceptron_update(
+            X,
+            Y,
+            self.p_acts_perceptron_w)
+
+        pprint.pprint({'X': X, 'Y': Y, 'w': self.p_acts_perceptron_w})
+
+    def get_a_perception(self):
         res = {}
 
         bt = self.algos.rctx.cmdj("dbtj", timeout=1)
 
         res['bt'] = bt
 
-        # res['backtrace'] = {
-        #    'offsets': self.algos.rctx.cmd("dbt~:[1]")
-        #}
-        #res['backtrace']['len'] = len(res['backtrace']['offsets'])
+        try:
+            regs = json.loads(self.algos.rctx.cmd("drj", timeout=1))
+        except:
+            regs = None
 
-        regs = self.algos.rctx.cmdj("drj", timeout=1)
+        if regs is None and self._def_perception is not None:
+            regs = dict([(o, -1) for o in self._def_perception['regs'].keys()])
 
         res['regs'] = regs
 
@@ -588,153 +735,364 @@ class RandomWalker:
 
         self.algos.rctx.timeout_error = False
 
-        log_s = json.dumps(res)
-
-        with io.open(self.log_, 'a+') as _f:
-            _f.write(u'' + log_s + '\n')
-
-        print(log_s)
-
         return res
 
-    def actuators(self):
+    def get_possible_actions(self):
         def log_action(actn):
-            with io.open(self.log_, 'a+') as _f:
-                _f.write(u'' + json.dumps(actn) + '\n')
+            self.trace(actn, 'actions')
+
+        def custom_run_lines(*args, **kwargs):
+            self.algos.run_lines(with_output=False, *args, **kwargs)
 
         def ds_0(timeout):
-            log_action({'act': 'ds_0', 'timeout': float(timeout)})
-
-            ds(1, timeout=timeout)
+            return ds(1, timeout=timeout)
 
         def ds(num, timeout):
-            log_action({'act': 'ds', 'timeout': float(timeout)})
-
             assert num > 0
-            self.algos.run_lines("ds %d" % num, timeout=timeout)
+
+            return [{
+                'log_entry': {
+                    'act': 'ds', 'num': int(num), 'timeout': float(timeout)
+                },
+                'callback': functools.partial(
+                    custom_run_lines, "ds %d" % num, timeout=timeout)}]
 
         def dso(num, timeout):
-            log_action({'act': 'dso', 'num': int(
-                num), 'timeout': float(timeout)})
-
             assert num > 0
-            self.algos.run_lines("dso %d" % num, timeout=timeout)
+
+            return [{
+                'log_entry': {
+                    'act': 'dso', 'num': int(num), 'timeout': float(timeout)
+                },
+                'callback': functools.partial(
+                    custom_run_lines, "dso %d" % num, timeout=timeout)}]
 
         def dcs(num, timeout):
-            log_action({'act': 'dcs', 'num': int(
-                num), 'timeout': float(timeout)})
-
             assert num > 0
-            self.algos.run_lines("dcs %d" % num, timeout=timeout)
+
+            return [{
+                'log_entry': {
+                    'act': 'dcs', 'num': int(num), 'timeout': float(timeout)
+                },
+                'callback': functools.partial(
+                    custom_run_lines, "dcs %d" % num, timeout=timeout)}]
 
         def dcr(timeout):
-            log_action({'act': 'dcr', 'timeout': float(timeout)})
-
-            self.algos.run_lines("dcr", timeout=timeout)
+            return [{
+                'log_entry': {
+                    'act': 'dcr', 'timeout': float(timeout)
+                },
+                'callback': functools.partial(
+                    custom_run_lines, "dcr", timeout=timeout)}]
 
         def dcf(timeout):
-            log_action({'act': 'dcf', 'timeout': float(timeout)})
-
-            self.algos.run_lines("dcf", timeout=timeout)
+            return [{
+                'log_entry': {
+                    'act': 'dcf', 'timeout': float(timeout)
+                },
+                'callback': functools.partial(
+                    custom_run_lines, "dcf", timeout=timeout)}]
 
         def dcc(timeout):
-            log_action({'act': 'dcc', 'timeout': float(timeout)})
-
-            self.algos.run_lines("dcc", timeout=timeout)
+            return [{
+                'log_entry': {
+                    'act': 'dcc', 'timeout': float(timeout)
+                },
+                'callback': functools.partial(
+                    custom_run_lines, "dcc", timeout=timeout)}]
 
         def kill_toribash(timeout):
-            log_action({'act': 'kill toribash_steam',
-                        'timeout': float(timeout)})
+            def _callback():
+                cmd_ = "pkill -9 toribash_steam"
+                print("Consequent command: %s" % cmd_)
+                os.system(cmd_)
 
-            cmd_ = "pkill toribash_steam"
-            print("Consequent command: %s" % cmd_)
-            os.system(cmd_)
+            return [{
+                'log_entry': {
+                    'act': 'kill toribash_steam', 'timeout': float(timeout)
+                },
+                'callback': _callback}]
+
+        def kill_radare(timeout):
+            def _callback():
+                cmd_ = "pkill -9 radare2"
+                print("Consequent command: %s" % cmd_)
+                os.system(cmd_)
+
+            return [{
+                'log_entry': {
+                    'act': 'kill radare', 'timeout': float(timeout)
+                },
+                'callback': _callback}]
 
         def ood(timeout):
-            log_action({'act': 'ood', 'timeout': float(timeout)})
-
-            self.algos.rctx.cmd("ood", timeout=timeout)
+            return [{
+                'log_entry': {
+                    'act': 'ood', 'timeout': float(timeout)
+                },
+                'callback': functools.partial(
+                    custom_run_lines, "ood", timeout=timeout)}]
 
         res = {}
 
         #res[0] = [dcf, dcc, dcr]
         #res[0] = [dcf]
         #res[0] = [ds_0, dcf, dcc, dcr, kill_toribash, ood]
-        res[0] = [ds_0, ds_0, ds_0, ds_0, kill_toribash, ood]
+        res[0] = [ds_0, ds_0, ds_0, ds_0, kill_toribash, kill_radare, ood]
         #res[1] = [dso, ds, dcs]
         res[1] = [dso, ds, ds]
 
         return res
 
-    def trace(self):
-        #self.algos.rctx.timeout_error = False
-        # self.algos.rctx.cmd("?")
+    def n_sample_generator(self):
+        def add_uniform(_range):
+            params = [ \
+                numpy.ones(len(_range)) / len(_range),
+                _range]
 
-        # if not self.algos.rctx.timeout_error:
-        drs = self.algos.rctx.cmd("dr", timeout=1)
-        pds = self.algos.rctx.cmd("pd 10 @r:eip", timeout=1)
-        dbts = self.algos.rctx.cmd("dbt", timeout=1)
+            return scipy.stats.rv_discrete(name='custom', values=params[::-1])
 
-        if drs is not None and pds is not None and dbts is not None:
-            print(drs)
-            print("  " + pds)
-            print(dbts)
+        g = [ add_uniform(o) for o \
+            in [ \
+                numpy.arange(2),
+                numpy.arange(6),
+                numpy.arange(3),
+                numpy.arange(1, 10 ** 3 + 1),
+                numpy.array([1.0]),
+                numpy.arange(2)]]
 
-    def utility(self):
-        return 0
+        def generate_sample():
+            return [ \
+                r.rvs(size=1)[0] for r in g]
 
-    def train(self):
-        if not hasattr(self, 'model_'):
-            self.model_ = {}
+        return generate_sample
 
-            self.model_['params'] = {
-                1: [numpy.ones(2) / 2.0, numpy.arange(2)],
-                2: [numpy.ones(6) / 6.0, numpy.arange(6)],
-                3: [numpy.ones(3) / 3.0, numpy.arange(3)],
-                4: [numpy.ones(10 ** 3) / (10 ** 3), 1 + numpy.arange(10 ** 3)],
-                5: [numpy.ones(1) / 1.0, numpy.array([1.0])],
-            }
+    def pick_up_with_partial(self, actions, n):
+        _act = None
 
-            self.model_['generators'] = {
-                1: scipy.stats.rv_discrete(name='custom', values=(self.model_['params'][1][::-1])),
-                2: scipy.stats.rv_discrete(name='custom', values=(self.model_['params'][2][::-1])),
-                3: scipy.stats.rv_discrete(name='custom', values=(self.model_['params'][3][::-1])),
-                4: scipy.stats.rv_discrete(name='custom', values=(self.model_['params'][4][::-1])),
-                5: scipy.stats.rv_discrete(name='custom', values=(self.model_['params'][5][::-1])),
-            }
+        if n[0] == 0:
+            _act = actions[n[0]][n[1]](n[4])
+        elif n[0] == 1:
+            _act = actions[n[0]][n[2]](n[3], n[4])
+
+        return _act
+
+    def actuators_log_action_and_execute(self, action):
+        for e in action:
+            self.trace(e['log_entry'], 'actions')
+            if e['callback'] is not None:
+                e['callback']()
 
     def model(self):
-        perc = self.perceptions()
-        actrs = self.actuators()
+        actions = self.actuators()
 
-        n = [r.rvs(size=1)[0] for r in self.model_['generators'].values()]
+        while True:
+            r = self.dumb_model_pick_up_action(self.internal_state, actions)
 
-        n1 = n[0]
-        n5 = n[4]
+            if r['n'][5] == 0 or self['perceptron']['w'] is None:
+                self.actuators_log_action_and_execute(r['action'])
+                break
+            else:
+                pass
 
-        if n1 == 0:
-            n2 = n[1]
-            actrs[n1][n2](n5)
-        elif n1 == 1:
-            n3 = n[2]
-            #n3 = numpy.random.randint(0, 10 ** 3, 1)[0]
-            n4 = n[3]
+    def generate_classification_sample(self, cmd_id, cmd_args, regs, d_regs, d_eps, index):
+        return self.generate_training_sample(
+            cmd_id, cmd_args, regs, d_regs, d_eps, index)
 
-            actrs[n1][n3](n4, n5)
+    def generate_action(self, n, p, w_kminus1, index):
+        a_k = None
+        q_k = None
+        X_k_q = None
+
+        while True:
+            actions = self.get_possible_actions()
+
+            n_k_hat = n()
+            a_k_tilde = self.pick_up_with_partial(actions, n_k_hat)
+            a_k_tilde[0]['log_entry']['index'] = index
+
+            if n_k_hat[5] == 0:
+                a_k = a_k_tilde
+                break
+
+            X_k_q_tilde = self.generate_classification_sample(
+                self.cmd_id(a_k_tilde),
+                self.cmd_args(a_k_tilde),
+                self.regs(p).iloc[[-1]],
+                self.d_regs(p).iloc[[-1]],
+                self.d_eps(p),
+                self.index(a_k_tilde))
+
+            q_k_tilde = _statistics.Statistics().helper_31_perceptron_classify(
+                X_k_q_tilde, w_kminus1)
+
+            if q_k_tilde == 1:
+                a_k = a_k_tilde
+                q_k = q_k_tilde
+                X_k_q = X_k_q_tilde
+                break
+
+        return a_k, q_k, X_k_q
+
+    def cmd_id(self, a_k):
+        res = []
+
+        if not hasattr(self, '_cmd_id_cmds'):
+            self._cmd_id_cmds = {}
+
+        for a in a_k:
+            if self._cmd_id_cmds.get(a['log_entry']['act']) is None:
+                self._cmd_id_cmds[a['log_entry']['act']] = len(self._cmd_id_cmds)
+
+            res.append(self._cmd_id_cmds[a['log_entry']['act']])
+
+        return pandas.DataFrame({'cmd_id': res})
+
+    def cmd_args(self, a_k):
+        res =  {
+            'timeout': [],
+            'num': []
+        }
+        for a in a_k:
+            res['timeout'].append(a['log_entry']['timeout'])
+            res['num'].append(a['log_entry'].get('num', -1))
+
+        return pandas.DataFrame(res)
+
+    def regs(self, p):
+        d = pandas.DataFrame([o.get('regs', {}) for o in p], index=p.index)
+
+        return d
+
+    def d_regs(self, p):
+        d = self.regs(p)
+
+        d.loc[0] = -1
+        d.sort_index(inplace=True)
+
+        d = d.diff(axis=0)
+        d.loc[0] = 0
+        d.sort_index(inplace=True)
+
+        return d.rename(columns=lambda x: 'd_regs_' + str(x)).iloc[1:]
+
+    def eps(self, p):
+        eps_ = {}
+
+        for k in range(len(p)):
+            for r in ['eip']:
+                def entropy(a):
+                    a = numpy.maximum(a, 1e-6)
+                    a /= numpy.sum(a)
+                    return numpy.sum(a * numpy.log(1 / a) + (1 - a) * numpy.log(1 / (1 - a)))
+
+                eps_[r] = [
+                    entropy(numpy.histogram(
+                        self.regs(p)[r].values[:k + 1], bins=10)[0])]
+
+        return pandas.DataFrame(eps_)
+
+    def d_eps(self, p):
+        eps = self.eps(p).rename(columns=lambda x: 'd_eps_' + str(x)).diff(axis=0)
+        eps.loc[1] = 0
+
+        return eps.iloc[1:]
+
+    def index(self, a_k):
+        return pandas.DataFrame({'index': [o['log_entry']['index'] for o in a_k]})
+
+    def generate_training_sample(self, cmd_id, cmd_args, regs, d_regs, d_eps, index):
+        # Why list doesn't support vectorized sum!!!! Good python3.
+        def sum_list(*args):
+            res = []
+            for o in args:
+                res.extend(o)
+
+            return res
+
+        return pandas.DataFrame(numpy.hstack([
+            cmd_id.values,
+            regs.values,
+            d_regs.values,
+            cmd_args.values,
+            d_eps.values,
+            numpy.ones((1, 1))]),
+            columns=sum_list(*[list(o) for o in [ \
+                cmd_id.columns,
+                regs.columns,
+                d_regs.columns,
+                cmd_args.columns,
+                d_eps.columns,
+                ['perceptron_offset']]]))
+
+    def utility(self, X_kplus1_u):
+        return \
+            (X_kplus1_u[['d_eps_eip']] > 1e-6).sum(axis=1).values + \
+            (X_kplus1_u[X_kplus1_u.columns[X_kplus1_u.columns.str.startswith('d_regs_')]] \
+                .abs() < 1e-6).sum(axis=1).values
+
+    def train_perceptron(self, w_kminus1, a_kminus1, p, X_kminus1_q):
+        X_k_u = self.generate_training_sample(
+            self.cmd_id(a_kminus1), self.cmd_args(a_kminus1),
+            self.regs(p).iloc[[-1]], self.d_regs(p).iloc[[-1]],
+            self.d_eps(p),
+            self.index(a_kminus1))
+        u_k = self.utility(X_k_u)
+        w_k = _statistics.Statistics().helper_31_perceptron_update(
+            X_kminus1_q.values, u_k, w_kminus1)
+
+        return w_k
+
+    def save_def_perception(self):
+        self._def_perception = None
+        while self._def_perception is None:
+            p = self.get_a_perception()
+
+            print(p)
+
+            if p['regs'] is None:
+                continue
+
+            self._def_perception = p
 
     def run(self):
-        self.train()
+        self.save_def_perception()
 
+        a = {}
+        p = {}
+        w = {0: numpy.zeros(100)}
+        X_q = {}
+        X_u = {}
+        u = {}
+        n = self.n_sample_generator()
+        q = {}
+
+        index = 0
         k = 1
         while True:
+            p_k = self.get_a_perception()
+            index += 1
+
+            p[k] = p_k
+
+            if a.get(k - 1) is not None and X_q.get(k - 1) is not None:
+                w_k = self.train_perceptron(w[k - 1], a[k - 1], pandas.Series(p), X_q[k-1])
+                w[k] = w_k
+            else:
+                w[k] = w[k - 1]
+
+            a_k, q_k, X_k_q = self.generate_action(n, pandas.Series(p), w[k - 1], index)
+
+            if q_k is not None and X_k_q is not None:
+                q[k] = q_k
+                X_q[k] = X_k_q
+
+            a[k] = a_k
+            index += 1
+
+            a_k[0]['callback']()
+
             k += 1
-
-            self.model()
-
-            # if k % 100:
-            #    self.trace()
-
-            self.trace()
 
 
 class TestJobsProcessor(unittest.TestCase):
@@ -1264,10 +1622,10 @@ class Radare:
         self._env['r2_valgrind'] = self._env.get('r2_valgrind', '')
 
         self._env['project_root'] = self._env.get('project_root',
-                                                  os.path.join(os.path.dirname(__file__), '..'))
+            os.path.join(os.path.abspath(os.path.dirname(__file__)), '..'))
 
         self._env['prefix'] = self._env.get('prefix',
-                                            os.path.join('deps', 'radare2', 'tmp', 'install'))
+            os.path.join(self._env['project_root'], 'deps', 'radare2', 'tmp', 'install'))
 
         self._env['path'] = self._join_paths(
             os.path.join(self._env['prefix'], 'bin'),
@@ -1275,7 +1633,7 @@ class Radare:
         )
 
         self._env['ld_library_path'] = self._join_paths(
-            os.path.join(self._env['prefix'], 'lib', 'libr'),
+            os.path.join(self._env['prefix'], 'lib'),
             self._env.get('ld_library_path')
         )
 
@@ -1306,7 +1664,8 @@ class Radare:
                 self._cmds.append(c)
 
         if self._options.tcp_server_port is not None:
-            self._cmds.append('.: %d' % self._options.tcp_server_port)
+            self._cmds.append('e tcp.islocal=true')
+            self._cmds.append('.:%d' % self._options.tcp_server_port)
 
         self._env['r2cmds'] = tempfile.mktemp()
         with io.open(self._env['r2cmds'], 'w') as f:
@@ -1333,7 +1692,7 @@ class Radare:
 
     def run(self):
         self._sub_shell(r"""
-            {valgrind} r2 {rarun} -c ".!cat $R2CMDS" {args};
+            {valgrind} radare2 {rarun} -c ".!cat $R2CMDS" {args};
             """.replace(
             '{args}', self._env['radare2_args'])
             .replace(
@@ -1368,6 +1727,7 @@ if __name__ == '__main__':
                 #e http.bind=127.0.0.1
                 #e http.port=""" + os.environ['radare2_http_port'] + r"""
                 #=h
+                e tcp.islocal=true
                 .:""" + os.environ['radare2_tcp_port'] + r"""
                 """
                   + '\nEOF' + r"""

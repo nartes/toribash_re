@@ -1075,13 +1075,17 @@ class Statistics:
         self.helper_29_visualize(w, b, X, Y)
         matplotlib.pyplot.show()
 
-    def helper_31_read_json_logs(self):
+    def helper_31_read_json_logs(self, _range=numpy.s_[-1:]):
+        assert isinstance(_range, numpy.s_[-1:].__class__)
+
         fl = sorted(glob.glob('build/rw*.json'),
                     key=lambda f: os.stat(f).st_ctime)
-        d = [json.loads(s) for s in io.open(
-            fl[-1], 'r').read().split('\n') if len(s) > 0]
+        d = []
+        for _f in fl[_range]:
+            d.extend([json.loads(s) for s in io.open(
+                _f, 'r').read().split('\n') if len(s) > 0])
 
-        return fl, d
+        return fl[_range], d
 
     def helper_31_proc_to_pandas(self, fl, d):
         d_ = [{'index': i, 'o': o} for i, o in zip(range(len(d)), d)]
@@ -1102,14 +1106,123 @@ class Statistics:
 
         p_ops = pandas.DataFrame(ops)
 
+        acts = [dict([('index', o['index'])] + list(o['o'].items())) \
+            for o in d_ if o['o'].get('act') is not None]
+
+        p_acts = pandas.DataFrame(acts)
+
         res = {
-            'perc': perc, 'regs': regs, 'p_regs': p_regs, 'p_ops': p_ops
+            'perc': perc, 'regs': regs, 'p_regs': p_regs, 'p_ops': p_ops, 'p_acts': p_acts
         }
 
         pprint.pprint(dict([(k, res[k].head(10))
-                            for k in ['p_regs', 'p_ops']]))
+                            for k in ['p_regs', 'p_ops', 'p_acts']]))
 
         return res
+
+    def helper_31_align_sequences(self, a_, b_, column, direction='forward'):
+        a = pandas.DataFrame({'data': a_[column].values})
+        b = pandas.DataFrame({'data': b_[column].values})
+
+        a['index'] = a.index
+        b['index'] = b.index
+
+        a['type'] = 0
+        b['type'] = 1
+
+        c_ = numpy.concatenate([a.values, b.values])
+        c = numpy.empty((a.shape[0] + b.shape[0],), dtype=numpy.dtype(list(a.dtypes.items())))
+        c['data'] = numpy.concatenate([a['data'].values, b['data'].values])
+        c['index'] = numpy.concatenate([a['index'].values, b['index'].values])
+        c['type'] = numpy.concatenate([a['type'].values, b['type'].values])
+
+        c2 = numpy.sort(c, order=['data', 'type', 'index'])
+
+        d = pandas.DataFrame(c2)
+
+        e = d[d['type'] == 1].index
+
+        e_ = None
+        r_ = None
+
+        if direction == 'forward':
+            e_ = numpy.concatenate([e, d.index[-1:] + 1])
+            r_ = numpy.arange(e_[0], e_[-1])
+        else:
+            e_ = numpy.concatenate([d.index[:1] - 1, e])
+            r_ = numpy.arange(e_[0] + 1, e_[-1] + 1)
+
+        f = numpy.diff(e_)
+
+        d2 = pandas.DataFrame(
+            {'rel_index': numpy.repeat(e, f)},
+            dtype=e.dtype,
+            index=r_)
+
+        d3 = pandas.concat([d, d2], axis=1, join_axes=[d.index])
+
+        return d3
+
+    def helper_31_train(self, res):
+        p_regs = res['p_regs']
+        p_acts = res['p_acts']
+        p_ops = res['p_ops']
+
+        eps_ = []
+
+        for r in ['eip']:
+            o = p_regs[r]
+            for k in range(o.size):
+                def entropy(a):
+                    a = numpy.maximum(a, 1e-6)
+                    a /= numpy.sum(a)
+                    return numpy.sum(a * numpy.log(1 / a) + (1 - a) * numpy.log(1 / (1 - a)))
+
+                eps_.append(entropy(numpy.histogram(o.loc[:k], bins=10)[0]))
+
+        eps = pandas.DataFrame(eps_)
+
+        res = {'eps': eps}
+
+        fig, axs = matplotlib.pyplot.subplots(2, sharex=True)
+        axs[0].plot(eps, '.-', label='entropy')
+        axs[1].plot(numpy.arange(1, eps.size), numpy.diff(eps_), label='diff')
+        matplotlib.pyplot.legend()
+
+        matplotlib.pyplot.show()
+
+        return eps
+
+    def helper_31_perceptron_update(self, X, Y, _w):
+        w = _w.copy()
+
+        assert w.size >= X.shape[1]
+        assert Y.size == X.shape[0]
+
+        for k in range(X.shape[0]):
+            xhi = X[k, :]
+            y = Y[k]
+
+            d = y * w[:X.shape[1]].dot(xhi.T)
+            _i = d <= 1e-6
+
+            if numpy.sum(_i) > 0:
+                w[:X.shape[1]][_i] = (w[:X.shape[1]] + y * xhi.T)[_i]
+
+        return w
+
+    def helper_31_perceptron_classify(self, X, w):
+        assert w.size >= X.shape[1]
+
+        d = w[:X.shape[1]].dot(X.T)
+
+        _i1_pos = d >= 1 - 1e-6
+        _i1_neg = d <= -1 + 1e-6
+
+        Y = numpy.ones(X.shape[0])
+        Y[_i1_neg] = -1
+
+        return Y
 
     def draw_scores(self):
         out_dir = os.path.join(self._env['project_root'], 'build', 'scores')
