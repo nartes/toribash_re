@@ -551,6 +551,8 @@ class RandomWalker:
 
         pprint.pprint({'log_': self.log_})
 
+        pandas.set_option('display.expand_frame_repr', False)
+
     def trace_debug_output(self):
         if self.internal_state['history']['p_eps'] is not None:
             print(self.internal_state['history']['p_eps'][-10:])
@@ -587,6 +589,23 @@ class RandomWalker:
             _f.write(log_s + '\n')
 
             print(log_s)
+
+    def trace_plots(self, **kwargs):
+        pprint.pprint(pandas.DataFrame({
+            'u': kwargs['u'],
+            'q': kwargs['q'],
+            'n_q': kwargs['n_q'],
+            }).iloc[-20:])
+
+        try:
+            pprint.pprint(pandas.concat(kwargs['X_q']).iloc[-5:])
+        except:
+            pass
+
+        try:
+            pprint.pprint(pandas.concat(kwargs['X_u']).iloc[-5:])
+        except:
+            pass
 
     def statistics_update_perceptions_history(self):
         assert self.internal_state['history']['logging']['_last_data_type'] == 'perceptions'
@@ -859,6 +878,7 @@ class RandomWalker:
                 numpy.arange(3),
                 numpy.arange(1, 10 ** 3 + 1),
                 numpy.array([1.0]),
+                numpy.arange(2),
                 numpy.arange(2)]]
 
         def generate_sample():
@@ -903,6 +923,7 @@ class RandomWalker:
         a_k = None
         q_k = None
         X_k_q = None
+        n_k = None
 
         while True:
             actions = self.get_possible_actions()
@@ -911,28 +932,28 @@ class RandomWalker:
             a_k_tilde = self.pick_up_with_partial(actions, n_k_hat)
             a_k_tilde[0]['log_entry']['index'] = index
 
-            if n_k_hat[5] == 0:
-                a_k = a_k_tilde
-                break
-
             X_k_q_tilde = self.generate_classification_sample(
                 self.cmd_id(a_k_tilde),
                 self.cmd_args(a_k_tilde),
                 self.regs(p).iloc[[-1]],
                 self.d_regs(p).iloc[[-1]],
-                self.d_eps(p),
+                self.d_eps(p).iloc[[-1]],
                 self.index(a_k_tilde))
 
-            q_k_tilde = _statistics.Statistics().helper_31_perceptron_classify(
+            if not hasattr(self, '_statistics'):
+                self._statistics = _statistics.Statistics()
+
+            q_k_tilde = self._statistics.helper_31_perceptron_classify(
                 X_k_q_tilde, w_kminus1)
 
-            if q_k_tilde == 1:
+            if n_k_hat[5] == 1 or q_k_tilde > 0:
                 a_k = a_k_tilde
                 q_k = q_k_tilde
                 X_k_q = X_k_q_tilde
+                n_k = n_k_hat
                 break
 
-        return a_k, q_k, X_k_q
+        return a_k, q_k, X_k_q, n_k
 
     def cmd_id(self, a_k):
         res = []
@@ -976,21 +997,28 @@ class RandomWalker:
 
         return d.rename(columns=lambda x: 'd_regs_' + str(x)).iloc[1:]
 
+    def regs_hist(self, p):
+        regs_hist_ = {}
+
+        for r in ['eip']:
+            regs_hist_[r] = {}
+            for k in range(len(p)):
+                regs_hist_[r][k] = \
+                    numpy.histogram(self.regs(p)[r].values[:k + 1], bins=10)[0]
+
+        return pandas.DataFrame(regs_hist_)
+
     def eps(self, p):
-        eps_ = {}
+        regs_hist_ = self.regs_hist(p)
 
-        for k in range(len(p)):
-            for r in ['eip']:
-                def entropy(a):
-                    a = numpy.maximum(a, 1e-6)
-                    a /= numpy.sum(a)
-                    return numpy.sum(a * numpy.log(1 / a) + (1 - a) * numpy.log(1 / (1 - a)))
+        def entropy(a):
+            a = numpy.maximum(a, 1e-6)
+            a /= numpy.sum(a)
+            return numpy.sum(a * numpy.log(1 / a) + (1 - a) * numpy.log(1 / (1 - a)))
 
-                eps_[r] = [
-                    entropy(numpy.histogram(
-                        self.regs(p)[r].values[:k + 1], bins=10)[0])]
+        eps_ = regs_hist_.copy().apply(lambda x: [entropy(o) for o in x])
 
-        return pandas.DataFrame(eps_)
+        return eps_
 
     def d_eps(self, p):
         eps = self.eps(p).rename(columns=lambda x: 'd_eps_' + str(x)).diff(axis=0)
@@ -1026,22 +1054,47 @@ class RandomWalker:
                 ['perceptron_offset']]]))
 
     def utility(self, X_kplus1_u):
-        return \
-            (X_kplus1_u[['d_eps_eip']] > 1e-6).sum(axis=1).values + \
-            (X_kplus1_u[X_kplus1_u.columns[X_kplus1_u.columns.str.startswith('d_regs_')]] \
-                .abs() < 1e-6).sum(axis=1).values
+        def utility_1():
+            u_k = pandas.DataFrame({'u': \
+                (X_kplus1_u[['d_eps_eip']] > 1e-6).sum(axis=1).values + \
+                (X_kplus1_u[X_kplus1_u.columns[X_kplus1_u.columns.str.startswith('d_regs_')]] \
+                    .abs() < 1e-6).sum(axis=1).values})
 
-    def train_perceptron(self, w_kminus1, a_kminus1, p, X_kminus1_q):
+            i_ = u_k > 2
+            u_k[i_] = 1
+            u_k[~i_] = -1
+
+            return u_k
+
+        def utility_2():
+            u_k = pandas.DataFrame({'u': \
+                (X_kplus1_u[['d_eps_eip']]).sum(axis=1).values})
+
+            i_ = u_k > 0.1
+            u_k[i_] = 1
+            u_k[~i_] = -1
+
+            return u_k
+
+        return utility_2().values.reshape(-1)
+
+    def train_perceptron(self, w_kminus1, a_kminus1, p, X_kminus1_q, n_6):
         X_k_u = self.generate_training_sample(
             self.cmd_id(a_kminus1), self.cmd_args(a_kminus1),
             self.regs(p).iloc[[-1]], self.d_regs(p).iloc[[-1]],
-            self.d_eps(p),
+            self.d_eps(p).iloc[[-1]],
             self.index(a_kminus1))
         u_k = self.utility(X_k_u)
-        w_k = _statistics.Statistics().helper_31_perceptron_update(
-            X_kminus1_q.values, u_k, w_kminus1)
+        if n_6 == 1:
+            if not hasattr(self, '_statistics'):
+                self._statistics = _statistics.Statistics()
 
-        return w_k
+            w_k = self._statistics.helper_31_perceptron_update(
+                X_kminus1_q.values, u_k, w_kminus1)
+        else:
+            w_k = w_kminus1.copy()
+
+        return w_k, u_k, X_k_u
 
     def save_def_perception(self):
         self._def_perception = None
@@ -1066,6 +1119,7 @@ class RandomWalker:
         u = {}
         n = self.n_sample_generator()
         q = {}
+        n_q = {}
 
         index = 0
         k = 1
@@ -1075,17 +1129,29 @@ class RandomWalker:
 
             p[k] = p_k
 
-            if a.get(k - 1) is not None and X_q.get(k - 1) is not None:
-                w_k = self.train_perceptron(w[k - 1], a[k - 1], pandas.Series(p), X_q[k-1])
+            if k > 1:
+                assert a.get(k - 1) is not None and X_q.get(k - 1) is not None
+
+                w_k, u_k, X_k_u = self.train_perceptron(
+                    w[k - 1],
+                    a[k - 1],
+                    pandas.Series(p),
+                    X_q[k - 1],
+                    n_q[k - 1][6])
+
                 w[k] = w_k
+                u[k] = u_k
+                X_u[k] = X_k_u
             else:
                 w[k] = w[k - 1]
 
-            a_k, q_k, X_k_q = self.generate_action(n, pandas.Series(p), w[k - 1], index)
+            a_k, q_k, X_k_q, n_k_q = self.generate_action(n, pandas.Series(p), w[k - 1], index)
 
-            if q_k is not None and X_k_q is not None:
-                q[k] = q_k
-                X_q[k] = X_k_q
+            assert q_k is not None and X_k_q is not None and n_k_q is not None
+
+            q[k] = q_k
+            X_q[k] = X_k_q
+            n_q[k] = n_k_q
 
             a[k] = a_k
             index += 1
@@ -1093,6 +1159,19 @@ class RandomWalker:
             a_k[0]['callback']()
 
             k += 1
+
+            self.trace_plots(
+                a=a,
+                p=p,
+                w=w,
+                X_q=X_q,
+                X_u=X_u,
+                u=u,
+                n=n,
+                q=q,
+                index=index,
+                k=k,
+                n_q=n_q)
 
 
 class TestJobsProcessor(unittest.TestCase):
