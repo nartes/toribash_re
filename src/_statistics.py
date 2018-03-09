@@ -29,9 +29,10 @@ class Statistics:
             self._env['project_root'], 'build', 'toribash', '**', '*.rpl'
         )
 
-        self._replays = glob.glob(self._env['replays'], recursive=True)
-
         self._env['verbose'] = True
+
+    def init_replays(self):
+        self._replays = glob.glob(self._env['replays'], recursive=True)
 
     def parse_replay(self, fpath):
         replay_string = None
@@ -1204,10 +1205,9 @@ class Statistics:
             y = Y[k]
 
             d = y * w[:X.shape[1]].dot(xhi.T)
-            _i = d <= 1e-6
 
-            if numpy.sum(_i) > 0:
-                w[:X.shape[1]][_i] = (w[:X.shape[1]] + y * xhi.T)[_i]
+            if d <= 1e-6:
+                w[:X.shape[1]] = w[:X.shape[1]] + y * xhi.T
 
         return w
 
@@ -1223,6 +1223,20 @@ class Statistics:
         Y[_i1_neg] = -1
 
         return Y
+
+    def helper_32_perceptron_does_not_fit(self):
+        b = pickle.loads(io.open('/tmp/2.dat', 'rb').read())
+
+        w = b['w'][70]
+        X_q = pandas.concat(b['X_q']).values[:-1, :]
+        Y = pandas.DataFrame(b['u']).values.reshape(-1)
+
+        for i in range(20):
+            p = numpy.random.permutation(numpy.arange(X_q.shape[0]))
+            w = self.helper_31_perceptron_update(X_q[p, :], Y[p], w)
+            Y_hat = self.helper_31_perceptron_classify(X_q, w)
+            loss = numpy.sum(numpy.square(Y - Y_hat))
+            pprint.pprint({'loss': loss, 'i': i})
 
     def draw_scores(self):
         out_dir = os.path.join(self._env['project_root'], 'build', 'scores')
@@ -1252,6 +1266,7 @@ class Statistics:
 class TestStatistics(unittest.TestCase):
     def test_should_be_consistent_with_replay_format(self):
         s = Statistics()
+        s.init_replays()
 
         for f in s._replays:
             sys.stderr.write(f + '\n')
@@ -1289,6 +1304,7 @@ class TestStatistics(unittest.TestCase):
 
     def test_dumb_search_separates(self):
         s = Statistics()
+        s.init_replays()
 
         ss = s.helper_26(10)[1]
         sp = s.helper_27_search_dumb(*ss)
