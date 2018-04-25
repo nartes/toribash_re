@@ -14,6 +14,10 @@ import pickle
 import copy
 import tempfile
 import pandas
+import sklearn.neural_network
+import keras.models
+import keras.layers
+import keras.optimizers
 
 
 class Statistics:
@@ -1224,19 +1228,93 @@ class Statistics:
 
         return Y
 
-    def helper_32_perceptron_does_not_fit(self):
-        b = pickle.loads(io.open('/tmp/2.dat', 'rb').read())
+    def helper_32_data(self):
+        b = pickle.loads(io.open(os.path.join(
+            self._env['project_root'], 'res/samples/2.dat'), 'rb').read())
 
         w = b['w'][70]
         X_q = pandas.concat(b['X_q']).values[:-1, :]
         Y = pandas.DataFrame(b['u']).values.reshape(-1)
 
-        for i in range(20):
-            p = numpy.random.permutation(numpy.arange(X_q.shape[0]))
+        X_q_min = X_q.min(axis=0)
+        X_q_max = X_q.max(axis=0)
+
+        X_q[:, :-1] = ((X_q - X_q_min) / numpy.maximum((X_q_max - X_q_min), 1e-6))[:, :-1]
+
+        return {'b': b, 'w': w, 'X_q': X_q, 'Y': Y}
+
+    def helper_32_perceptron(self):
+        d = self.helper_32_data()
+
+        b, w, X_q, Y = [d[k] for k in ['b', 'w', 'X_q', 'Y']]
+
+        w_ = w
+        w = numpy.zeros_like(w_)
+
+        for i in range(200):
+            p = numpy.random.permutation(numpy.arange(X_q.shape[0]))[:10]
             w = self.helper_31_perceptron_update(X_q[p, :], Y[p], w)
             Y_hat = self.helper_31_perceptron_classify(X_q, w)
-            loss = numpy.sum(numpy.square(Y - Y_hat))
+            loss = ((Y - Y_hat) ** 2).sum()
+            if i % 10 == 0:
+                w /= (w ** 2).mean()
+
             pprint.pprint({'loss': loss, 'i': i})
+
+        return b, w, X_q, Y
+
+    def helper_32_mlp(self):
+        d = self.helper_32_data()
+
+        bmlp = sklearn.neural_network.MLPRegressor(
+            activation='tanh',
+            solver='adam',
+            alpha=0.001,
+            batch_size=10,
+            learning_rate="invscaling",
+            learning_rate_init=0.001,
+            power_t=0.5,
+            max_iter=10 ** 7,
+            #loss='l2',
+            hidden_layer_sizes=[2,],
+            shuffle=False,
+            random_state=numpy.random,
+            tol=1e-8,
+            verbose=True,
+            warm_start=False,
+            momentum=0.9,
+            nesterovs_momentum=True,
+            early_stopping=False,
+            validation_fraction=0,
+            beta_1=0.9,
+            beta_2=0.999,
+            epsilon=1e-8,
+            #n_iter_no_change=10
+            )
+
+        return d, bmlp
+
+    def helper_32_mlp_2(self):
+        d = self.helper_32_data()
+
+        a = keras.models.Sequential()
+        #a.add(keras.layers.Dense(2, activation='linear', input_shape=d['X_q'].shape[1:]))
+        a.add(keras.layers.Dense(1, activation='linear', input_shape=d['X_q'].shape[1:]))
+
+        a.compile(
+            loss=lambda p, t: keras.backend.sum(keras.backend.abs(p - t)),
+            optimizer=keras.optimizers.Adam(),
+            metrics=['accuracy'])
+
+        a.fit(
+            d['X_q'],
+            d['Y'],
+            batch_size=10,
+            epochs=200,
+            shuffle=True,
+            verbose=1)
+
+        return a, d
 
     def draw_scores(self):
         out_dir = os.path.join(self._env['project_root'], 'build', 'scores')

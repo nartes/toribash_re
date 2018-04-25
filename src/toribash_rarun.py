@@ -542,53 +542,136 @@ wa call `f~sym.abc[0]`@@=eip
         self.kill_server()
 
 
-class RandomWalker:
+class RandomWalkerAgent:
     def __init__(self):
-        self.algos = Algos()
+        pass
+        self.a = {}
+        self.p = {}
+        self.w = {0: numpy.zeros(100)}
+        self.X_q = {}
+        self.X_u = {}
+        self.q = {}
+        self.n_q = {}
+        self.index = 0
+        self.k = 1
 
-        self.log_ = tempfile.mktemp(
+    def get_parameters(self):
+        return self.generate_sample()
+
+    def update(self, *args, **kwargs):
+        pass
+
+    def n_sample_generator(self):
+        def add_uniform(_range):
+            params = [ \
+                numpy.ones(len(_range)) / len(_range),
+                _range]
+
+            return scipy.stats.rv_discrete(name='custom', values=params[::-1])
+
+        g = [ add_uniform(o) for o \
+            in [ \
+                numpy.arange(2),
+                numpy.arange(6),
+                numpy.arange(3),
+                numpy.arange(1, 10 ** 3 + 1),
+                numpy.array([1.0]),
+                numpy.arange(2),
+                numpy.arange(2)]]
+
+        def generate_sample():
+            return [ \
+                r.rvs(size=1)[0] for r in g]
+
+        return generate_sample
+
+    def generate_classification_sample(self, cmd_id, cmd_args, regs, d_regs, d_eps, index):
+        return self.generate_training_sample(
+            cmd_id, cmd_args, regs, d_regs, d_eps, index)
+
+    def generate_training_sample(self, cmd_id, cmd_args, regs, d_regs, d_eps, index):
+        # Why list doesn't support vectorized sum!!!! Good python3.
+        def sum_list(*args):
+            res = []
+            for o in args:
+                res.extend(o)
+
+            return res
+
+        return pandas.DataFrame(numpy.hstack([
+            cmd_id.values,
+            regs.values,
+            d_regs.values,
+            cmd_args.values,
+            d_eps.values,
+            numpy.ones((1, 1))]),
+            columns=sum_list(*[list(o) for o in [ \
+                cmd_id.columns,
+                regs.columns,
+                d_regs.columns,
+                cmd_args.columns,
+                d_eps.columns,
+                ['perceptron_offset']]]))
+
+    def utility(self, X_kplus1_u):
+        def utility_1():
+            u_k = pandas.DataFrame({'u': \
+                (X_kplus1_u[['d_eps_eip']] > 1e-6).sum(axis=1).values + \
+                (X_kplus1_u[X_kplus1_u.columns[X_kplus1_u.columns.str.startswith('d_regs_')]] \
+                    .abs() < 1e-6).sum(axis=1).values})
+
+            i_ = u_k > 2
+            u_k[i_] = 1
+            u_k[~i_] = -1
+
+            return u_k
+
+        def utility_2():
+            u_k = pandas.DataFrame({'u': \
+                (X_kplus1_u[['d_eps_eip']]).sum(axis=1).values})
+
+            i_ = u_k > 0.1
+            u_k[i_] = 1
+            u_k[~i_] = -1
+
+            return u_k
+
+        #def utility_3():
+        #    u_k = X_kplus1_u[['d_eps_eip']].sum(axis=1) +
+
+
+        return utility_2().values.reshape(-1)
+
+    def train_perceptron(self, w_kminus1, a_kminus1, p, X_kminus1_q, n_6):
+        X_k_u = self.generate_training_sample(
+            self.cmd_id(a_kminus1), self.cmd_args(a_kminus1),
+            self.regs(p).iloc[[-1]], self.d_regs(p).iloc[[-1]],
+            self.d_eps(p).iloc[[-1]],
+            self.index(a_kminus1))
+        u_k = self.utility(X_k_u)
+        if n_6 == 1:
+            if not hasattr(self, '_statistics'):
+                self._statistics = _statistics.Statistics()
+
+            w_k = self._statistics.helper_31_perceptron_update(
+                X_kminus1_q.values, u_k, w_kminus1)
+        else:
+            w_k = w_kminus1.copy()
+
+        return w_k, u_k, X_k_u
+
+
+class RandomWalkerCore:
+    def __init__(self):
+        self._algos = Algos()
+        self._agent = RandomWalkerAgent()
+
+        self._log = tempfile.mktemp(
             dir='build', prefix='rw-log-', suffix='.json')
 
         pprint.pprint({'log_': self.log_})
 
-        pandas.set_option('display.expand_frame_repr', False)
-
-    def trace_debug_output(self):
-        if self.internal_state['history']['p_eps'] is not None:
-            print(self.internal_state['history']['p_eps'][-10:])
-
-        drs = self.algos.rctx.cmd("dr", timeout=1)
-        pds = self.algos.rctx.cmd("pd 10 @r:eip", timeout=1)
-        dbts = self.algos.rctx.cmd("dbt", timeout=1)
-
-        if drs is not None and pds is not None and dbts is not None:
-            print(drs)
-            print("  " + pds)
-            print(dbts)
-
-    def trace_log(self, data=None, data_type=None):
-        assert data is not None
-        assert data_type is not None
-
-        with io.open(self.log_, 'a+') as _f:
-            log_s = u''
-
-            log_s += json.dumps(data)
-
-            if data_type in ['perceptions', 'actions']:
-                self.index += 1
-                data['index'] = self.index
-
-            self.internal_state['history']['logging']['_last_data_type'] = data_type
-
-            if data_type == 'perceptions':
-                self.internal_state['history']['logging']['_last_perceptions'] = data
-            elif data_type == 'actions':
-                self.internal_state['history']['logging']['_last_actions'] = data
-
-            _f.write(log_s + '\n')
-
-            print(log_s)
+        #pandas.set_option('display.expand_frame_repr', False)
 
     def trace_plots(self, **kwargs):
         pprint.pprint(pandas.DataFrame({
@@ -607,136 +690,15 @@ class RandomWalker:
         except:
             pass
 
-    def statistics_update_perceptions_history(self):
-        assert self.internal_state['history']['logging']['_last_data_type'] == 'perceptions'
-
-        last_perceptions = self.internal_state['history']['logging']['_last_actions']
-
-        l = None
-        if last_perceptions['regs'] is not None:
-            l_ = last_perceptions['regs']
-            if not isinstance(l_, list):
-                l_ = [l_]
-
-            l = pandas.DataFrame(l_)
-            l['index'] = last_perceptions['index']
-
-        if l is not None:
-            if self.internal_state['history']['p_regs'] is None:
-                self.internal_state['history']['p_regs'] = l
-            else:
-                self.internal_state['history']['p_regs'] = \
-                    pandas.concat([self.internal_state['history']['p_regs'], l])
-
-        if self.internal_state['history']['p_regs'] is not None:
-            eps_ = {}
-
-            for r in ['eip']:
-                def entropy(a):
-                    a = numpy.maximum(a, 1e-6)
-                    a /= numpy.sum(a)
-                    return numpy.sum(a * numpy.log(1 / a) + (1 - a) * numpy.log(1 / (1 - a)))
-
-                eps_[r] = [
-                    entropy(numpy.histogram(
-                        self.internal_state['history']['p_regs'][r].values, bins=10)[0])]
-
-            if self.internal_state['history']['p_eps'] is None:
-                self.internal_state['history']['p_eps'] = pandas.DataFrame(eps_)
-            else:
-                self.internal_state['history']['p_eps'] = \
-                    pandas.concat([ \
-                        self.internal_state['history']['p_eps'],
-                        pandas.DataFrame(eps_)])
-
-    def statistics_update_acts_history(self):
-        assert self.internal_state['history']['logging']['_last_data_type'] == 'actions'
-
-        last_actions = self.internal_state['history']['logging']['_last_actions']
-
-        l = None
-        if last_actions['act'] is not None:
-            l_ = dict([(k, [v]) for k, v in last_actions.items() \
-                if k in ['act', 'num', 'index']])
-
-            l = pandas.DataFrame(l_)
-            l['index'] = last_actions['index']
-
-        if l is not None:
-            if self.internal_state['history']['p_acts'] is None:
-                self.internal_state['history']['p_acts'] = l
-            else:
-                self.internal_state['history']['p_acts'] = \
-                    pandas.concat([self.internal_state['history']['p_acts'], l])
-
-    def perceptron_batch_train(self):
-        assert self.internal_state['history']['logging']['_last_data_type'] == 'perceptions'
-
-        prev_index = self.p_regs.iloc[-2]['index']
-        cur_index = self.p_regs.iloc[-1]['index']
-
-        acts_table = pandas.DataFrame(
-            {'act': pandas.unique(self.p_acts['act'].sort_values().values)})
-        acts_table['index'] = acts_table.index
-
-        cur_acts = self.p_acts[self.p_acts['index'] > prev_index]
-        if not 'num'  in cur_acts.columns:
-            cur_acts['num'] = -1
-
-        d_e = numpy.diff(self.p_eps['eip'].iloc[-2:].values)
-
-        d_regs_columns = [c for c in self.p_regs.columns if not c in ['index']]
-        d_regs = pandas.DataFrame(
-            numpy.diff(self.p_regs.iloc[-2:][d_regs_columns].values, axis=0),
-            columns=['d_' + str(c) for c in d_regs_columns])
-
-        u = numpy.sum(d_e > 1e-6) + numpy.sum(numpy.abs(d_regs.values) < 1e-6)
-
-        cur_acts['cmd_id'] = pandas.merge(
-            cur_acts[['act']], acts_table, how='left', on=['act'])['index'].values
-
-        cur_acts.loc[cur_acts['num'].isna(), 'num'] = -1
-
-        samples = pandas.DataFrame({
-            'cmd_id': cur_acts['cmd_id'].values,
-            'args_0_num': cur_acts['num'].values,
-            'index': cur_acts['index'].values
-        })
-
-        samples = samples.join(
-            self.p_regs[d_regs_columns] \
-                .iloc[-numpy.ones(samples.shape[0])] \
-                .reset_index(drop=True))
-
-        samples = samples.join(
-            d_regs.iloc[numpy.zeros(samples.shape[0])] \
-            .reset_index(drop=True))
-
-        Y = numpy.repeat((u > 1) * 2 - 1, samples.shape[0])
-
-        print(samples)
-
-        if self.p_acts_perceptron_w is None:
-            self.p_acts_perceptron_w = numpy.zeros(len(samples.columns) + 1)
-
-        X = samples.assign(__offset__=1).values
-
-        _statistics.Statistics().helper_31_perceptron_update(
-            X,
-            Y,
-            self.p_acts_perceptron_w)
-
-        pprint.pprint({'X': X, 'Y': Y, 'w': self.p_acts_perceptron_w})
-
     def get_a_perception(self):
         res = {}
 
-        bt = self.algos.rctx.cmdj("dbtj", timeout=1)
+        bt = self._algos.rctx.cmdj("dbtj", timeout=1)
 
         res['bt'] = bt
 
         try:
-            regs = json.loads(self.algos.rctx.cmd("drj", timeout=1))
+            regs = json.loads(self._algos.rctx.cmd("drj", timeout=1))
         except:
             regs = None
 
@@ -745,14 +707,14 @@ class RandomWalker:
 
         res['regs'] = regs
 
-        ops = self.algos.rctx.cmdj("aoj 10 @r:eip", timeout=1)
+        ops = self._algos.rctx.cmdj("aoj 10 @r:eip", timeout=1)
 
         res['ops'] = ops
 
-        errs = {'timeout_error': self.algos.rctx.timeout_error}
+        errs = {'timeout_error': self._algos.rctx.timeout_error}
         res['errs'] = errs
 
-        self.algos.rctx.timeout_error = False
+        self._algos.rctx.timeout_error = False
 
         return res
 
@@ -761,7 +723,7 @@ class RandomWalker:
             self.trace(actn, 'actions')
 
         def custom_run_lines(*args, **kwargs):
-            self.algos.run_lines(with_output=False, *args, **kwargs)
+            self._algos.run_lines(with_output=False, *args, **kwargs)
 
         def ds_0(timeout):
             return ds(1, timeout=timeout)
@@ -854,38 +816,10 @@ class RandomWalker:
 
         res = {}
 
-        #res[0] = [dcf, dcc, dcr]
-        #res[0] = [dcf]
-        #res[0] = [ds_0, dcf, dcc, dcr, kill_toribash, ood]
         res[0] = [ds_0, ds_0, ds_0, ds_0, kill_toribash, kill_radare, ood]
-        #res[1] = [dso, ds, dcs]
         res[1] = [dso, ds, ds]
 
         return res
-
-    def n_sample_generator(self):
-        def add_uniform(_range):
-            params = [ \
-                numpy.ones(len(_range)) / len(_range),
-                _range]
-
-            return scipy.stats.rv_discrete(name='custom', values=params[::-1])
-
-        g = [ add_uniform(o) for o \
-            in [ \
-                numpy.arange(2),
-                numpy.arange(6),
-                numpy.arange(3),
-                numpy.arange(1, 10 ** 3 + 1),
-                numpy.array([1.0]),
-                numpy.arange(2),
-                numpy.arange(2)]]
-
-        def generate_sample():
-            return [ \
-                r.rvs(size=1)[0] for r in g]
-
-        return generate_sample
 
     def pick_up_with_partial(self, actions, n):
         _act = None
@@ -903,57 +837,8 @@ class RandomWalker:
             if e['callback'] is not None:
                 e['callback']()
 
-    def model(self):
-        actions = self.actuators()
-
-        while True:
-            r = self.dumb_model_pick_up_action(self.internal_state, actions)
-
-            if r['n'][5] == 0 or self['perceptron']['w'] is None:
-                self.actuators_log_action_and_execute(r['action'])
-                break
-            else:
-                pass
-
-    def generate_classification_sample(self, cmd_id, cmd_args, regs, d_regs, d_eps, index):
-        return self.generate_training_sample(
-            cmd_id, cmd_args, regs, d_regs, d_eps, index)
-
     def generate_action(self, n, p, w_kminus1, index):
-        a_k = None
-        q_k = None
-        X_k_q = None
-        n_k = None
-
-        while True:
-            actions = self.get_possible_actions()
-
-            n_k_hat = n()
-            a_k_tilde = self.pick_up_with_partial(actions, n_k_hat)
-            a_k_tilde[0]['log_entry']['index'] = index
-
-            X_k_q_tilde = self.generate_classification_sample(
-                self.cmd_id(a_k_tilde),
-                self.cmd_args(a_k_tilde),
-                self.regs(p).iloc[[-1]],
-                self.d_regs(p).iloc[[-1]],
-                self.d_eps(p).iloc[[-1]],
-                self.index(a_k_tilde))
-
-            if not hasattr(self, '_statistics'):
-                self._statistics = _statistics.Statistics()
-
-            q_k_tilde = self._statistics.helper_31_perceptron_classify(
-                X_k_q_tilde, w_kminus1)
-
-            if n_k_hat[5] == 1 or q_k_tilde > 0:
-                a_k = a_k_tilde
-                q_k = q_k_tilde
-                X_k_q = X_k_q_tilde
-                n_k = n_k_hat
-                break
-
-        return a_k, q_k, X_k_q, n_k
+        pass
 
     def cmd_id(self, a_k):
         res = []
@@ -1029,149 +914,15 @@ class RandomWalker:
     def index(self, a_k):
         return pandas.DataFrame({'index': [o['log_entry']['index'] for o in a_k]})
 
-    def generate_training_sample(self, cmd_id, cmd_args, regs, d_regs, d_eps, index):
-        # Why list doesn't support vectorized sum!!!! Good python3.
-        def sum_list(*args):
-            res = []
-            for o in args:
-                res.extend(o)
-
-            return res
-
-        return pandas.DataFrame(numpy.hstack([
-            cmd_id.values,
-            regs.values,
-            d_regs.values,
-            cmd_args.values,
-            d_eps.values,
-            numpy.ones((1, 1))]),
-            columns=sum_list(*[list(o) for o in [ \
-                cmd_id.columns,
-                regs.columns,
-                d_regs.columns,
-                cmd_args.columns,
-                d_eps.columns,
-                ['perceptron_offset']]]))
-
-    def utility(self, X_kplus1_u):
-        def utility_1():
-            u_k = pandas.DataFrame({'u': \
-                (X_kplus1_u[['d_eps_eip']] > 1e-6).sum(axis=1).values + \
-                (X_kplus1_u[X_kplus1_u.columns[X_kplus1_u.columns.str.startswith('d_regs_')]] \
-                    .abs() < 1e-6).sum(axis=1).values})
-
-            i_ = u_k > 2
-            u_k[i_] = 1
-            u_k[~i_] = -1
-
-            return u_k
-
-        def utility_2():
-            u_k = pandas.DataFrame({'u': \
-                (X_kplus1_u[['d_eps_eip']]).sum(axis=1).values})
-
-            i_ = u_k > 0.1
-            u_k[i_] = 1
-            u_k[~i_] = -1
-
-            return u_k
-
-        return utility_2().values.reshape(-1)
-
-    def train_perceptron(self, w_kminus1, a_kminus1, p, X_kminus1_q, n_6):
-        X_k_u = self.generate_training_sample(
-            self.cmd_id(a_kminus1), self.cmd_args(a_kminus1),
-            self.regs(p).iloc[[-1]], self.d_regs(p).iloc[[-1]],
-            self.d_eps(p).iloc[[-1]],
-            self.index(a_kminus1))
-        u_k = self.utility(X_k_u)
-        if n_6 == 1:
-            if not hasattr(self, '_statistics'):
-                self._statistics = _statistics.Statistics()
-
-            w_k = self._statistics.helper_31_perceptron_update(
-                X_kminus1_q.values, u_k, w_kminus1)
-        else:
-            w_k = w_kminus1.copy()
-
-        return w_k, u_k, X_k_u
-
-    def save_def_perception(self):
-        self._def_perception = None
-        while self._def_perception is None:
-            p = self.get_a_perception()
-
-            print(p)
-
-            if p['regs'] is None:
-                continue
-
-            self._def_perception = p
-
     def run(self):
-        self.save_def_perception()
-
-        a = {}
-        p = {}
-        w = {0: numpy.zeros(100)}
-        X_q = {}
-        X_u = {}
-        u = {}
-        n = self.n_sample_generator()
-        q = {}
-        n_q = {}
-
-        index = 0
-        k = 1
         while True:
-            p_k = self.get_a_perception()
-            index += 1
+            p = self.get_a_perception()
+            acts = self.get_possible_actions()
+            params = self._agent.get_parameters()
 
-            p[k] = p_k
+            
 
-            if k > 1:
-                assert a.get(k - 1) is not None and X_q.get(k - 1) is not None
-
-                w_k, u_k, X_k_u = self.train_perceptron(
-                    w[k - 1],
-                    a[k - 1],
-                    pandas.Series(p),
-                    X_q[k - 1],
-                    n_q[k - 1][6])
-
-                w[k] = w_k
-                u[k] = u_k
-                X_u[k] = X_k_u
-            else:
-                w[k] = w[k - 1]
-
-            a_k, q_k, X_k_q, n_k_q = self.generate_action(n, pandas.Series(p), w[k - 1], index)
-
-            assert q_k is not None and X_k_q is not None and n_k_q is not None
-
-            q[k] = q_k
-            X_q[k] = X_k_q
-            n_q[k] = n_k_q
-
-            a[k] = a_k
-            index += 1
-
-            a_k[0]['callback']()
-
-            k += 1
-
-            self.trace_plots(
-                a=a,
-                p=p,
-                w=w,
-                X_q=X_q,
-                X_u=X_u,
-                u=u,
-                n=n,
-                q=q,
-                index=index,
-                k=k,
-                n_q=n_q)
+        pass
 
 
 class TestJobsProcessor(unittest.TestCase):
@@ -1830,7 +1581,7 @@ if __name__ == '__main__':
         if len(sys.argv) == 3:
             getattr(algos, sys.argv[2])()
     elif 'rw' == sys.argv[1]:
-        RandomWalker().run()
+        RandomWalkerCore().run()
     elif 'make' == sys.argv[1]:
         Tasks(sys.argv[2:])
     elif 'unit_test' == sys.argv[1]:
