@@ -14,10 +14,10 @@ import pickle
 import copy
 import tempfile
 import pandas
-import sklearn.neural_network
-import keras.models
-import keras.layers
-import keras.optimizers
+#import sklearn.neural_network
+#import keras.models
+#import keras.layers
+#import keras.optimizers
 
 
 class Statistics:

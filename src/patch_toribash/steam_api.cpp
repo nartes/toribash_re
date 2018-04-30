@@ -1,5 +1,7 @@
 #include "steam_api.h"
 #include <cstdio>
+#include "environment.hpp"
+#include <cstdlib>
 
 typedef union c_steam_id_t {
 	unsigned long long all_bits;
@@ -157,7 +159,53 @@ void * SteamUtils()
 	return reinterpret_cast<void *>(&su);
 }
 
-void * SteamUserStats()
+void * steam_toribash_binding(environment::toribash_methods_e method_type, std::uint32_t arg1, std::uint32_t arg2, std::uint32_t arg3, std::uint32_t arg4)
 {
+    if (method_type == environment::LUA_CALL && arg1 != 0)
+    {
+        auto st = reinterpret_cast<lua_State *>(arg1);
+
+        int n = lua_gettop(st);
+
+        if (n == 1 &&
+            (environment::toribash_methods_e)((int)lua_tonumber(st, 1))
+                == environment::ENVIRONMENT_INIT)
+        {
+            environment::Environment::lua_state = reinterpret_cast<lua_State *>(arg1);
+
+            environment::Environment::create_environment();
+        }
+
+        for (int i = 1; i <= n; ++i)
+        {
+            lua_pushvalue(st, i);
+
+            const char * str = lua_tostring(st, n + 1);
+
+            printf("[%d], type = %d, str = %s\n",
+                i, lua_type(st, i),
+                str ? str : "");
+
+            if (str)
+            {
+                lua_settop(st, n);
+            }
+        }
+    }
+    else
+    {
+        std::abort();
+    }
+
+    return (void *)-1;
+}
+
+void * SteamUserStats(std::uint32_t mask, int type, std::uint32_t arg1, std::uint32_t arg2, std::uint32_t arg3, std::uint32_t arg4)
+{
+    if (mask == (std::uint32_t)0xdeadbeef)
+    {
+        return steam_toribash_binding((environment::toribash_methods_e)type, arg1, arg2, arg3, arg4);
+    }
+
 	return 0;
 }

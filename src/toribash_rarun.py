@@ -264,6 +264,7 @@ class Algos:
 
     def toribash_manual_functions(self):
         self.run_lines(r"""
+            e anal.bb.maxsize=100000
             af man.steam_init_v2 @ 0x081fb240
             af man.steam_networking @ 0x081fb590
             af man.steam_init @ 0x81fae20
@@ -467,6 +468,28 @@ wa call `f~sym.abc[0]`@@=eip
         self.rctx.cmd("dr eip = %d" % _cur_pos)
         self.rctx.cmd("wx %s @@ eip" % _old_cmd)
         self.rctx.cmd(".--")
+
+    def call_inject_steam_toribash_binding(self):
+        self.rctx.cmd("aa", 60)
+        x2 = int(self.rctx.cmd("f~man.lua_init[0]", 1).strip(), 16)
+        assert x2 > 0
+        self.rctx.cmd("db %d" % x2, 1)
+
+        while int(self.rctx.cmd("dr~eip[1]", 1), 16) != x2:
+            self.rctx.cmd("dc", 60)
+
+        x1 = self.rctx.cmd("f~sym.imp.SteamUserStats[0]", 1).strip()
+        self.rctx.cmd(
+('"wa sub esp, 0x100; ' +
+'mov dword [esp], 0xdeadbeef; ' +
+'mov dword [esp+4], 0x5; ' +
+'mov ebx, dword [esp + 0x104]; ' +
+'mov dword [esp+0x8], ebx; ' +
+'call %s; ' +
+'add esp, 0x100; ' +
+'xor eax, eax; ' +
+'ret; " ' +
+'@ 0x80f6d10') % x1, 5)
 
     def toribash_set_b_for_steam_api(self):
         # TODO(radare): it doesn't accept ~<prefix>*

@@ -1,3 +1,5 @@
+#include <cstdint>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -19,7 +21,7 @@ void * SteamUser();
 void * SteamMatchmaking();
 void SteamAPI_RunCallbacks();
 void * SteamUtils();
-void * SteamUserStats();
+void * SteamUserStats(std::uint32_t mask, int type, std::uint32_t arg1, std::uint32_t arg2, std::uint32_t arg3, std::uint32_t arg4);
 
 #ifdef __cplusplus
 }
