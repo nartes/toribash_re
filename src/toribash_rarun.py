@@ -471,12 +471,12 @@ wa call `f~sym.abc[0]`@@=eip
 
     def call_inject_steam_toribash_binding(self):
         self.rctx.cmd("aa", 60)
-        x2 = int(self.rctx.cmd("f~man.lua_init[0]", 1).strip(), 16)
-        assert x2 > 0
-        self.rctx.cmd("db %d" % x2, 1)
+        #x2 = int(self.rctx.cmd("f~man.lua_init[0]", 1).strip(), 16)
+        #assert x2 > 0
+        #self.rctx.cmd("db %d" % x2, 1)
 
-        while int(self.rctx.cmd("dr~eip[1]", 1), 16) != x2:
-            self.rctx.cmd("dc", 60)
+        #while int(self.rctx.cmd("dr~eip[1]", 1), 16) != x2:
+        #    self.rctx.cmd("dc", 60)
 
         x1 = self.rctx.cmd("f~sym.imp.SteamUserStats[0]", 1).strip()
         self.rctx.cmd(
