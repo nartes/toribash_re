@@ -4,31 +4,52 @@ extern "C" {
 #include <deps/lua/lua.h>
 };
 
+#include <cstdio>
+
 namespace environment {
+
+typedef enum message_t
+{
+    TORIBASH_STATE      = 0,
+    TORIBASH_ACTION     = 1
+} message_e;
+
+typedef struct toribash_state_t
+{
+    struct player {
+        int joints[20];
+        int grips[2];
+    } players[2];
+} toribash_state_s;
+
+typedef struct toribash_action_t
+{
+    struct player {
+        int joints[20];
+        int grips[2];
+    } players[2];
+} toribash_action_s;
 
 typedef enum toribash_methods_t
 {
-    LUA_CALL            = 5,
-    ENVIRONMENT_INIT    = 0x20
+    ENVIRONMENT_INIT    = 0x5
 } toribash_methods_e;
-
-extern "C" {
-typedef void (* toribash_lua_pushcclosure_t)(lua_State *L, lua_CFunction fn, int);
-};
 
 class Environment
 {
 public:
-    static void create_environment();
+    Environment(lua_State * lua_state);
 
-public:
-    static lua_State * lua_state;
-
-private:
-    Environment();
+    void asm_call();
 
 private:
-    static Environment * global_environment;
+    void _dump_state();
+    void _parse_action();
+
+private:
+    lua_State * _lua_state;
+
+    static Environment * _env;
 };
 
 };

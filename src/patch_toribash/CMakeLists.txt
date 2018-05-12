@@ -1,10 +1,9 @@
-cmake_minimum_required(VERSION 3.10
-    FATAL_ERROR)
+project(patch_toribash)
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -m32 -mabi=ms -O0")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -m32 -O0")
 set(CMAKE_LDFLAGS "${CMAKE_LDFLAGS} -m32")
 
-set(LUA_ROOT ${CMAKE_SOURCE_DIR}/../../deps/lua)
+set(LUA_ROOT ${CMAKE_SOURCE_DIR}/deps/lua)
 
 find_library(
     LUA_LIBS

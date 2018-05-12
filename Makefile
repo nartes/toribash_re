@@ -54,6 +54,7 @@ run_toribash_radare2:
 	--tcp_server_port 12345 --args='-d $$DEBUG_PROGRAM' -V
 
 run_toribash:
+	cp src/toribash.lua build/toribash/data/script; \
 	export LD_LIBRARY_PATH=$$PWD/build/patch_toribash/dummy_libs:$$LD_LIBRARY_PATH; \
 	export LD_PRELOAD=$$PWD/build/patch_toribash/libpatch_toribash.so; \
 	cd build/toribash; \
