@@ -15,14 +15,6 @@ tensorflow 1.0
 
 import tensorflow
 import numpy
-import time
-import ctypes
-import io
-import enum
-import time
-import os
-
-import ddpg
 
 
 
@@ -106,7 +98,7 @@ class DDPG(object):
         with tensorflow.variable_scope('Actor', reuse=reuse, custom_getter=custom_getter):
             net = tensorflow.layers.dense(s, 30, activation=tensorflow.nn.relu, name='l1', trainable=trainable)
             a = tensorflow.layers.dense(net, self.a_dim, activation=tensorflow.nn.tanh, name='a', trainable=trainable)
-            return tensorflow.multiply(a, self.a_bound, name='scaled_a')
+            return tensorflow.clip_by_value(a, self.a_bound[0, :], self.a_bound[1, :], name='clipped_a')
 
     def _build_c(self, s, a, reuse=None, custom_getter=None):
         trainable = True if reuse is None else False
@@ -117,50 +109,3 @@ class DDPG(object):
             b1 = tensorflow.get_variable('b1', [1, n_l1], trainable=trainable)
             net = tensorflow.nn.relu(tensorflow.matmul(s, w1_s) + tensorflow.matmul(a, w1_a) + b1)
             return tensorflow.layers.dense(net, 1, trainable=trainable)  # Q(s,a)
-
-
-###############################  training  ####################################
-
-class Experiment:
-    def __init__(self):
-        self._s_dim = toribash_state.DIM
-        self._a_dim = toribash_action.DIM
-        self._a_bound = toribash_action.BOUNDS.T
-
-        self._ddpg = DDPG(a_dim, s_dim, a_bound)
-
-        self._var = 3  # control exploration
-
-        self._t1 = time.time()
-
-        self._env = env.ToribashEnvironment()
-
-    def train(self):
-        for i in range(MAX_EPISODES):
-            s = read_state().to_tensor()
-            ep_reward = 0
-            for j in range(MAX_EP_STEPS):
-                #if RENDER:
-                #    env.render()
-
-                # Add exploration noise
-                a = self._ddpg.choose_action(s)
-                a = numpy.clip(numpy.random.normal(a, self._var), -2, 2)    # add randomness to action selection for exploration
-                make_action(numpy.int32(a))
-                r = 1
-                s_ = read_state().to_tensor()
-
-                self._ddpg.store_transition(s, a, r / 10, s_)
-
-                if self._ddpg.pointer > MEMORY_CAPACITY:
-                    var *= .9995    # decay the action randomness
-                    self._ddpg.learn()
-
-                s = s_
-                ep_reward += r
-                if j == MAX_EP_STEPS-1:
-                    print('Episode:', i, ' Reward: %i' % int(ep_reward), 'Explore: %.2f' % var, )
-                    # if ep_reward > -300:RENDER = True
-                    break
-
-        print('Running time: ', time.time() - self._t1)
