@@ -7,9 +7,9 @@ class Experiment:
     def __init__(self):
         self._env = ddpg.toribash_env.ToribashEnvironment()
 
-        self._s_dim = ddpg.toribash_env.toribash_state.DIM
-        self._a_dim = ddpg.toribash_env.toribash_action.DIM
-        self._a_bound = ddpg.toribash_env.toribash_action.BOUNDS.T
+        self._s_dim = ddpg.toribash_env.toribash_state_t.DIM
+        self._a_dim = ddpg.toribash_env.toribash_action_t.DIM
+        self._a_bound = ddpg.toribash_env.toribash_action_t.BOUNDS.T
 
         self._ddpg = ddpg.ddpg.DDPG(self._a_dim, self._s_dim, self._a_bound)
 
@@ -19,20 +19,23 @@ class Experiment:
 
 
     def train(self):
+        self._env.lua_dostring(b'')
+        s = self._env.read_state()
+
         for i in range(ddpg.ddpg.MAX_EPISODES):
-            s = self._env.read_state()
             ep_reward = 0
             for j in range(ddpg.ddpg.MAX_EP_STEPS):
                 #if RENDER:
                 #    env.render()
 
                 # Add exploration noise
-                a = self._ddpg.choose_action(s)
+                a = self._ddpg.choose_action(s.to_tensor())
                 a = numpy.clip(
                     numpy.random.normal(a, self._var),
                     self._a_bound[0, :],
                     self._a_bound[1, :])    # add randomness to action selection for exploration
                 self._env.make_action(numpy.int32(a))
+                self._env.lua_dostring(b'')
                 s_ = self._env.read_state()
                 r = numpy.double(s_.players[0].score) - numpy.double(s.players[0].score)
 
@@ -45,7 +48,7 @@ class Experiment:
                 s = s_
                 ep_reward += r
                 if j == ddpg.ddpg.MAX_EP_STEPS-1:
-                    print('Episode:', i, ' Reward: %i' % int(ep_reward), 'Explore: %.2f' % var, )
+                    print('Episode: %i, Reward: %i, Explore: %.2f' % (i, int(ep_reward), self._var))
                     # if ep_reward > -300:RENDER = True
                     break
 
