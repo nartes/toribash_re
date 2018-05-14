@@ -5,6 +5,7 @@
 #include <vector>
 #include <functional>
 #include <unistd.h>
+#include <ctime>
 
 namespace environment
 {
@@ -16,25 +17,48 @@ Environment::Environment(lua_State * lua_state)
     : _lua_state(lua_state)
 {
     _env = this;
+    _ddpg_socket_in = "/tmp/patch_toribash_environment_ddpg_socket_in";
+    _ddpg_socket_out =  "/tmp/patch_toribash_environment_ddpg_socket_out";
+
+    remove(_ddpg_socket_in.c_str());
+    remove(_ddpg_socket_out.c_str());
+
+    remove((_ddpg_socket_in + ".lock").c_str());
+    remove((_ddpg_socket_out + ".lock").c_str());
 }
 
 void Environment::_parse_action()
 {
     toribash_action_s act;
 
-    const char * fname_in = "/tmp/patch_toribash_environment_ddpg_socket_in";
+    while (true)
+    {
+         FILE * f_lock = fopen((_ddpg_socket_in + ".lock").c_str(), "r");
+         FILE * f_file = fopen(_ddpg_socket_in.c_str(), "r");
 
-	FILE * ddpg_socket_in;
+         if (!f_lock && f_file)
+         {
+             fclose(f_file);
 
-	while (!(ddpg_socket_in = fopen(fname_in, "r")))
-	{
-		sleep(1000);
-	}
+             break;
+         }
 
-	if (!ddpg_socket_in)
-	{
-		std::abort();
-	}
+         if (f_file)
+         {
+             fclose(f_file);
+         }
+
+         if (f_lock)
+         {
+             fclose(f_lock);
+         }
+
+         usleep(50 * 1000);
+    }
+
+    fclose(fopen((_ddpg_socket_in + ".lock").c_str(), "a"));
+
+    FILE * ddpg_socket_in = fopen(_ddpg_socket_in.c_str(), "r");
 
     int mt = TORIBASH_STATE;
     int act_size;
@@ -49,7 +73,10 @@ void Environment::_parse_action()
 
     fread(&act, act_size, 1, ddpg_socket_in);
 
-	fclose(ddpg_socket_in);
+    fclose(ddpg_socket_in);
+
+    remove(_ddpg_socket_in.c_str());
+    remove((_ddpg_socket_in + ".lock").c_str());
 
     for (int p = 0; p < 2; ++p)
     {
@@ -100,15 +127,32 @@ void Environment::_dump_state()
             int v = lua_tonumber(_lua_state, -1);
             lua_pop(_lua_state, 1);
 
-
             lua_getglobal(_lua_state, "get_joint_info");
             lua_pushnumber(_lua_state, p);
             lua_pushnumber(_lua_state, v);
             lua_call(_lua_state, 2, 1);
 
+            int t2 = lua_gettop(_lua_state);
+
+            /*
+            lua_pushnil(_lua_state);
+
+            while (lua_next(_lua_state, t2) != 0)
+            {
+                const char * k2 = lua_tolstring(_lua_state, -2, 0);
+                int vt2 = lua_type(_lua_state, -1);
+                lua_pop(_lua_state, 1);
+
+                printf("[%d, %d] %s : type %d\n",
+                    k, v, k2, vt2);
+            }
+            */
+
+            lua_getfield(_lua_state, t2, "state");
+
             st.players[p].joints[v] = lua_tonumber(_lua_state, -1);
 
-            lua_pop(_lua_state, 1);
+            lua_pop(_lua_state, 2);
         }
 
         int i = 0;
@@ -129,21 +173,47 @@ void Environment::_dump_state()
     int mt = TORIBASH_STATE;
     int sts = sizeof(st);
 
-    const char * fname_out = "/tmp/patch_toribash_environment_ddpg_socket_out";
+    while (true)
+    {
+         FILE * f_lock = fopen((_ddpg_socket_out + ".lock").c_str(), "r");
+         FILE * f_file = fopen(_ddpg_socket_out.c_str(), "r");
 
-	FILE * ddpg_socket_out = fopen(fname_out, "w");
+         if (!f_lock && !f_file)
+         {
+             break;
+         }
 
-	if (!ddpg_socket_out)
-	{
-		std::abort();
-	}
+         if (f_file)
+         {
+             fclose(f_file);
+         }
+
+         if (f_lock)
+         {
+             fclose(f_lock);
+         }
+
+         usleep(50 * 1000);
+    }
+
+    FILE * f_lock = fopen((_ddpg_socket_out + ".lock").c_str(), "a");
+    fclose(f_lock);
+
+    FILE * ddpg_socket_out = fopen(_ddpg_socket_out.c_str(), "w");
+
+    if (!ddpg_socket_out)
+    {
+        std::abort();
+    }
 
     fwrite(&mt, sizeof(mt), 1, ddpg_socket_out);
     fwrite(&sts, sizeof(sts), 1, ddpg_socket_out);
     fwrite(&st, sts, 1, ddpg_socket_out);
     fflush(ddpg_socket_out);
 
-	fclose(ddpg_socket_out);
+    fclose(ddpg_socket_out);
+
+    remove((_ddpg_socket_out + ".lock").c_str());
 }
 
 void Environment::asm_call()

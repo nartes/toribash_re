@@ -57,22 +57,39 @@ class toribash_action(ctypes.Structure):
 
 class ToribashEnvironment:
     def __init__(self):
-        pass
+        self._ddpg_socket_out = "/tmp/patch_toribash_environment_ddpg_socket_in"
+        self._ddpg_socket_in =  "/tmp/patch_toribash_environment_ddpg_socket_out"
 
     def send_bytes(self, data):
-        ddpg_socket_out = io.open("/tmp/patch_toribash_environment_ddpg_socket_in", "wb")
+        while os.path.exists(self._ddpg_socket_out) or \
+            os.path.exists(self._ddpg_socket_out + '.lock'):
+            time.sleep(0.001)
+
+        io.open(self._ddpg_socket_out + '.lock', 'a').close()
+
+        ddpg_socket_out = io.open(self._ddpg_socket_out, "wb")
         ddpg_socket_out.write(data)
         ddpg_socket_out.close()
 
+        os.remove(self._ddpg_socket_out + '.lock')
+
     def read_bytes(self):
-        fname_in = "/tmp/patch_toribash_environment_ddpg_socket_out"
-        while not os.path.exists(fname_in):
+        while os.path.exists(self._ddpg_socket_in + '.lock') or \
+            not os.path.exists(self._ddpg_socket_in):
            time.sleep(0.001)
 
-        ddpg_socket_in = io.open(fname_in, "rb")
+        io.open(self._ddpg_socket_in + '.lock', 'a').close()
+
+        while not os.path.exists(self._ddpg_socket_in + '.lock'):
+            time.sleep(0.001)
+
+        ddpg_socket_in = io.open(self._ddpg_socket_in, "rb")
 
         res =  ddpg_socket_in.read()
         ddpg_socket_in.close()
+
+        os.remove(self._ddpg_socket_in)
+        os.remove(self._ddpg_socket_in + '.lock')
 
         return res
 
@@ -83,7 +100,7 @@ class ToribashEnvironment:
         assert ctypes.sizeof(toribash_state) == ctypes.c_int32.from_buffer_copy(z[4:][:4]).value
         st = toribash_state.from_buffer_copy(z[8:])
 
-        return st
+        return st.to_tensor()
 
     def make_action(self, a_tensor):
         act = toribash_action.from_tensor(a_tensor)

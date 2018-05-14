@@ -5,6 +5,7 @@ extern "C" {
 };
 
 #include <cstdio>
+#include <string>
 
 namespace environment {
 
@@ -50,6 +51,9 @@ private:
     lua_State * _lua_state;
 
     static Environment * _env;
+
+    std::string _ddpg_socket_in;
+    std::string _ddpg_socket_out;
 };
 
 };
