@@ -6,6 +6,7 @@
 #include <functional>
 #include <unistd.h>
 #include <ctime>
+#include <sys/stat.h>
 
 namespace environment
 {
@@ -17,66 +18,23 @@ Environment::Environment(lua_State * lua_state)
     : _lua_state(lua_state)
 {
     _env = this;
-    _ddpg_socket_in = "/tmp/patch_toribash_environment_ddpg_socket_in";
-    _ddpg_socket_out =  "/tmp/patch_toribash_environment_ddpg_socket_out";
 
-    remove(_ddpg_socket_in.c_str());
-    remove(_ddpg_socket_out.c_str());
+    while ((_msg_queue_id = msgget(
+        TORIBASH_MSG_QUEUE_KEY,
+        IPC_CREAT | IPC_EXCL | S_IRUSR | S_IWUSR)) == -1)
+    {
+        _msg_queue_id = msgget(TORIBASH_MSG_QUEUE_KEY, 0);
 
-    remove((_ddpg_socket_in + ".lock").c_str());
-    remove((_ddpg_socket_out + ".lock").c_str());
+        if (_msg_queue_id == -1 || msgctl(_msg_queue_id, IPC_RMID, 0) == -1)
+        {
+            throw std::runtime_error("msgget has failed");
+        }
+    }
 }
 
 void Environment::_parse_action()
 {
-    toribash_action_s act;
-
-    while (true)
-    {
-         FILE * f_lock = fopen((_ddpg_socket_in + ".lock").c_str(), "r");
-         FILE * f_file = fopen(_ddpg_socket_in.c_str(), "r");
-
-         if (!f_lock && f_file)
-         {
-             fclose(f_file);
-
-             break;
-         }
-
-         if (f_file)
-         {
-             fclose(f_file);
-         }
-
-         if (f_lock)
-         {
-             fclose(f_lock);
-         }
-
-         usleep(50 * 1000);
-    }
-
-    fclose(fopen((_ddpg_socket_in + ".lock").c_str(), "a"));
-
-    FILE * ddpg_socket_in = fopen(_ddpg_socket_in.c_str(), "r");
-
-    int mt = TORIBASH_STATE;
-    int act_size;
-
-    fread(&mt, sizeof(mt), 1, ddpg_socket_in);
-    fread(&act_size, sizeof(act_size), 1, ddpg_socket_in);
-
-    if (act_size != sizeof(act))
-    {
-        std::abort();
-    }
-
-    fread(&act, act_size, 1, ddpg_socket_in);
-
-    fclose(ddpg_socket_in);
-
-    remove(_ddpg_socket_in.c_str());
-    remove((_ddpg_socket_in + ".lock").c_str());
+    auto act = recv_message<toribash_action_t>(TORIBASH_ACTION);
 
     for (int p = 0; p < 2; ++p)
     {
@@ -94,7 +52,7 @@ void Environment::_parse_action()
             lua_getglobal(_lua_state, "set_joint_state");
             lua_pushnumber(_lua_state, p);
             lua_pushnumber(_lua_state, v);
-            lua_pushnumber(_lua_state, act.players[p].joints[v]);
+            lua_pushnumber(_lua_state, act->players[p].joints[v]);
             lua_call(_lua_state, 3, 0);
         }
 
@@ -105,9 +63,23 @@ void Environment::_parse_action()
             lua_getglobal(_lua_state, "set_grip_info");
             lua_pushnumber(_lua_state, p);
             lua_pushnumber(_lua_state, hand_id);
-            lua_pushnumber(_lua_state, act.players[p].grips[i++]);
+            lua_pushnumber(_lua_state, act->players[p].grips[i++]);
             lua_call(_lua_state, 3, 0);
         }
+    }
+}
+
+void Environment::_lua_dostring()
+{
+    for (
+        auto lua_ds = recv_message<toribash_lua_dostring_t>(TORIBASH_LUA_DOSTRING);
+        lua_ds->len != 0;
+        lua_ds = recv_message<toribash_lua_dostring_t>(TORIBASH_LUA_DOSTRING)
+        )
+    {
+        lua_ds->buf[sizeof(lua_ds->buf) - 1] = 0;
+        luaL_loadstring(_lua_state, lua_ds->buf);
+        lua_pcall(_lua_state, 0, LUA_MULTRET, 0);
     }
 }
 
@@ -168,52 +140,19 @@ void Environment::_dump_state()
 
             lua_pop(_lua_state, 1);
         }
+
+        lua_getglobal(_lua_state, "get_player_info");
+        lua_pushnumber(_lua_state, p);
+        lua_call(_lua_state, 1, 1);
+
+        lua_getfield(_lua_state, lua_gettop(_lua_state), "score");
+
+        st.players[p].score = lua_tonumber(_lua_state, -1);
+
+        lua_pop(_lua_state, 2);
     }
 
-    int mt = TORIBASH_STATE;
-    int sts = sizeof(st);
-
-    while (true)
-    {
-         FILE * f_lock = fopen((_ddpg_socket_out + ".lock").c_str(), "r");
-         FILE * f_file = fopen(_ddpg_socket_out.c_str(), "r");
-
-         if (!f_lock && !f_file)
-         {
-             break;
-         }
-
-         if (f_file)
-         {
-             fclose(f_file);
-         }
-
-         if (f_lock)
-         {
-             fclose(f_lock);
-         }
-
-         usleep(50 * 1000);
-    }
-
-    FILE * f_lock = fopen((_ddpg_socket_out + ".lock").c_str(), "a");
-    fclose(f_lock);
-
-    FILE * ddpg_socket_out = fopen(_ddpg_socket_out.c_str(), "w");
-
-    if (!ddpg_socket_out)
-    {
-        std::abort();
-    }
-
-    fwrite(&mt, sizeof(mt), 1, ddpg_socket_out);
-    fwrite(&sts, sizeof(sts), 1, ddpg_socket_out);
-    fwrite(&st, sts, 1, ddpg_socket_out);
-    fflush(ddpg_socket_out);
-
-    fclose(ddpg_socket_out);
-
-    remove((_ddpg_socket_out + ".lock").c_str());
+    send_message(TORIBASH_STATE, &st);
 }
 
 void Environment::asm_call()
@@ -239,6 +178,8 @@ void Environment::asm_call()
     static auto enter_freeze_cb = [] (lua_State * L)
     {
         printf("enter_freeze is called\n");
+
+        Environment::_env->_lua_dostring();
 
         Environment::_env->_dump_state();
 

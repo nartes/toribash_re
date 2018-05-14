@@ -4,18 +4,21 @@ import io
 import enum
 import os
 import time
+import sysv_ipc
 
-class message_e(enum.Enum):
-    TORIBASH_STATE      = 0
-    TORIBASH_ACTION     = 1
+class message_t(enum.Enum):
+    TORIBASH_STATE          = 1
+    TORIBASH_ACTION         = 2
+    TORIBASH_LUA_DOSTRING   = 3
 
-class toribash_state(ctypes.Structure):
-    class player(ctypes.Structure):
+class toribash_state_t(ctypes.Structure):
+    class player_t(ctypes.Structure):
         _fields_ = [
             ('joints', ctypes.c_int32 * 20),
-            ('grips', ctypes.c_int32 * 2)]
+            ('grips', ctypes.c_int32 * 2),
+            ('score', ctypes.c_double)]
 
-    _fields_ = [('players', player * 2)]
+    _fields_ = [('players', player_t * 2)]
 
     def to_tensor(self):
         return numpy.concatenate([
@@ -26,12 +29,12 @@ class toribash_state(ctypes.Structure):
 
     DIM = (20 + 2) * 2
 
-class toribash_action(ctypes.Structure):
-    class player(ctypes.Structure):
+class toribash_action_t(ctypes.Structure):
+    class player_t(ctypes.Structure):
         _fields_ = [
             ('joints', ctypes.c_int32 * 20),
             ('grips', ctypes.c_int32 * 2)]
-    _fields_ = [('players', player * 2)]
+    _fields_ = [('players', player_t * 2)]
 
     DIM = (20 + 2) * 2
     BOUNDS = numpy.array(([[1,4],] * 20 + [[1,2],] * 2) * 2, dtype=numpy.int32)
@@ -55,57 +58,42 @@ class toribash_action(ctypes.Structure):
 
         return act
 
+class toribash_lua_dostring_t(ctypes.Structure):
+    _pack_ = 1
+    _fields_ = [
+        ('len', ctypes.c_uint32),
+        ('buf', ctypes.c_char * 4096)]
+
 class ToribashEnvironment:
+    TORIBASH_MSG_QUEUE_KEY = ctypes.c_int32(0xffaaffbb)
+    MAX_MESSAGE_SIZE = 8192
+
     def __init__(self):
-        self._ddpg_socket_out = "/tmp/patch_toribash_environment_ddpg_socket_in"
-        self._ddpg_socket_in =  "/tmp/patch_toribash_environment_ddpg_socket_out"
-
-    def send_bytes(self, data):
-        while os.path.exists(self._ddpg_socket_out) or \
-            os.path.exists(self._ddpg_socket_out + '.lock'):
-            time.sleep(0.001)
-
-        io.open(self._ddpg_socket_out + '.lock', 'a').close()
-
-        ddpg_socket_out = io.open(self._ddpg_socket_out, "wb")
-        ddpg_socket_out.write(data)
-        ddpg_socket_out.close()
-
-        os.remove(self._ddpg_socket_out + '.lock')
-
-    def read_bytes(self):
-        while os.path.exists(self._ddpg_socket_in + '.lock') or \
-            not os.path.exists(self._ddpg_socket_in):
-           time.sleep(0.001)
-
-        io.open(self._ddpg_socket_in + '.lock', 'a').close()
-
-        while not os.path.exists(self._ddpg_socket_in + '.lock'):
-            time.sleep(0.001)
-
-        ddpg_socket_in = io.open(self._ddpg_socket_in, "rb")
-
-        res =  ddpg_socket_in.read()
-        ddpg_socket_in.close()
-
-        os.remove(self._ddpg_socket_in)
-        os.remove(self._ddpg_socket_in + '.lock')
-
-        return res
+        self._msg_queue = sysv_ipc.MessageQueue(
+            self.TORIBASH_MSG_QUEUE_KEY.value,
+            max_message_size = self.MAX_MESSAGE_SIZE)
 
     def read_state(self):
-        z = self.read_bytes()
+        message_buf, message_type = \
+            self._msg_queue.receive(block=True, type=message_t.TORIBASH_STATE.value)
 
-        assert ctypes.c_int32.from_buffer_copy(z[:4]).value == message_e.TORIBASH_STATE.value
-        assert ctypes.sizeof(toribash_state) == ctypes.c_int32.from_buffer_copy(z[4:][:4]).value
-        st = toribash_state.from_buffer_copy(z[8:])
+        assert message_type == message_t.TORIBASH_STATE.value
 
-        return st.to_tensor()
+        st = toribash_state_t.from_buffer_copy(message_buf)
+
+        return st
 
     def make_action(self, a_tensor):
-        act = toribash_action.from_tensor(a_tensor)
+        act = toribash_action_t.from_tensor(a_tensor)
 
-        self.send_bytes(
-            bytes(ctypes.c_int32(message_e.TORIBASH_ACTION.value)) +
-            bytes(ctypes.c_int32(ctypes.sizeof(toribash_action))) +
-            bytes(act))
+        self._msg_queue.send(bytes(act), block=True, type=message_t.TORIBASH_ACTION.value)
+
+    def lua_dostring(self, lua_str):
+        lua_ds = toribash_lua_dostring_t()
+        lua_ds.buf = lua_str
+        lua_ds.len = len(lua_ds.buf)
+
+        self._msg_queue.send(
+            bytes(lua_ds),
+            block=True,
+            type=message_t.TORIBASH_LUA_DOSTRING.value)

@@ -33,10 +33,10 @@ class Experiment:
                     self._a_bound[0, :],
                     self._a_bound[1, :])    # add randomness to action selection for exploration
                 self._env.make_action(numpy.int32(a))
-                r = 1
                 s_ = self._env.read_state()
+                r = numpy.double(s_.players[0].score) - numpy.double(s.players[0].score)
 
-                self._ddpg.store_transition(s, a, r / 10, s_)
+                self._ddpg.store_transition(s.to_tensor(), a, r / 10, s_.to_tensor())
 
                 if self._ddpg.pointer > ddpg.ddpg.MEMORY_CAPACITY:
                     var *= .9995    # decay the action randomness
