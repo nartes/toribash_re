@@ -19,6 +19,7 @@ class Experiment:
 
 
     def train(self):
+        self._env.lua_dostring(b'_toggle_ui()')
         self._env.lua_dostring(b'')
         s = self._env.read_state()
 
@@ -42,7 +43,7 @@ class Experiment:
                 self._ddpg.store_transition(s.to_tensor(), a, r / 10, s_.to_tensor())
 
                 if self._ddpg.pointer > ddpg.ddpg.MEMORY_CAPACITY:
-                    var *= .9995    # decay the action randomness
+                    self._var *= .9995    # decay the action randomness
                     self._ddpg.learn()
 
                 s = s_
