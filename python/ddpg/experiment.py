@@ -1,6 +1,9 @@
 import numpy
 import time
 import pprint
+import tempfile
+import io
+import json
 
 import ddpg
 
@@ -17,6 +20,10 @@ class Config(ddpg.ddpg.Config):
 
 class Experiment:
     def __init__(self, config=Config()):
+        self._log_file = tempfile.mktemp(prefix='ddpg-', suffix='.log.txt')
+
+        pprint.pprint({'log': self._log_file})
+
         self._config = config
 
         self._env = ddpg.toribash_env.ToribashEnvironment()
@@ -49,10 +56,17 @@ class Experiment:
 
         return res.reshape(_bound.shape[1:])
 
+    def _log(self, data):
+        with io.open(self._log_file, 'a+') as f:
+            f.write(u'' + json.dumps(data)+'\n')
+
+        pprint.pprint(data)
+
     def train(self):
         self._env.lua_dostring(b'_toggle_ui()')
         self._env.lua_dostring(b'')
-        s = self._env.read_state()
+        initial_state = self._env.read_state()
+        s = initial_state
 
         for i in range(self._config.max_episodes):
             ep_reward = 0
@@ -76,7 +90,12 @@ class Experiment:
                 self._env.make_action(numpy.int32(a))
                 self._env.lua_dostring(b'')
                 s_ = self._env.read_state()
-                r = numpy.double(s_.players[0].score) - numpy.double(s.players[0].score)
+                r = numpy.abs(
+                    numpy.double(s_.players[0].score) - \
+                    numpy.double(s.players[0].score)) + \
+                    numpy.abs(
+                    numpy.double(s_.players[1].score) - \
+                    numpy.double(s.players[1].score))
 
                 self._ddpg.store_transition(s.to_tensor(), a, r / 10, s_.to_tensor())
 
@@ -85,14 +104,20 @@ class Experiment:
                     self._uniform_ratio *= self._config.uniform_decay
                     self._ddpg.learn()
 
-                s = s_
-                ep_reward += r
-                if j == self._config.max_ep_steps - 1:
-                    pprint.pprint({
+                if s_.players[0].score == 0 and s_.players[1].score == 0 and \
+                    numpy.all(s_.to_tensor() == initial_state.to_tensor()) and \
+                    ep_reward > 0:
+                    self._log({
                         'episode': i,
                         'reward': ep_reward,
                         'var': self._var,
-                        'uniform_ratio': self._uniform_ratio})
+                        'uniform_ratio': self._uniform_ratio,
+                        'ddpg.pointer': self._ddpg.pointer})
                     break
+                else:
+                    ep_reward += r
+
+                s = s_
+                #if j == self._config.max_ep_steps - 1:
 
         print('Running time: ', time.time() - self._t1)
