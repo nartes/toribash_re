@@ -1,44 +1,27 @@
-"""
-Note: This is a updated version from my previous code,
-for the target network, I use moving average to soft replace target parameters instead using assign function.
-By doing this, it has 20% speed up on my machine (CPU).
-
-Deep Deterministic Policy Gradient (DDPG), Reinforcement Learning.
-DDPG is Actor Critic based algorithm.
-Pendulum example.
-
-View more on my tutorial page: https://morvanzhou.github.io/tutorials/
-
-Using:
-tensorflow 1.0
-"""
-
 import tensorflow
 import numpy
 
 
-
-#####################  hyper parameters  ####################
-
-MAX_EPISODES = 200
-MAX_EP_STEPS = 200
-LR_A = 0.001    # learning rate for actor
-LR_C = 0.002    # learning rate for critic
-GAMMA = 0.9     # reward discount
-TAU = 0.01      # soft replacement
-MEMORY_CAPACITY = 10000
-BATCH_SIZE = 32
-
-RENDER = False
-ENV_NAME = 'Pendulum-v0'
-
-
-###############################  DDPG  ####################################
+class Config:
+    def __init__(self):
+        self.lr_a = 0.001    # learning rate for actor
+        self.lr_c = 0.002    # learning rate for critic
+        self.gamma = 0.9     # reward discount
+        self.tau = 0.01      # soft replacement
+        self.model_capacity = 1
 
 
 class DDPG(object):
-    def __init__(self, a_dim, s_dim, a_bound,):
-        self.memory = numpy.zeros((MEMORY_CAPACITY, s_dim * 2 + a_dim + 1), dtype=numpy.float32)
+    def __init__(
+        self,
+        a_dim,
+        s_dim,
+        a_bound,
+        config):
+
+        self._config = config
+
+        self.memory = numpy.zeros((self._config.memory_capacity, s_dim * 2 + a_dim + 1), dtype=numpy.float32)
         self.pointer = 0
         self.sess = tensorflow.Session()
 
@@ -54,7 +37,7 @@ class DDPG(object):
         q = self._build_c(self.S, self.a, )
         a_params = tensorflow.get_collection(tensorflow.GraphKeys.TRAINABLE_VARIABLES, scope='Actor')
         c_params = tensorflow.get_collection(tensorflow.GraphKeys.TRAINABLE_VARIABLES, scope='Critic')
-        ema = tensorflow.train.ExponentialMovingAverage(decay=1 - TAU)          # soft replacement
+        ema = tensorflow.train.ExponentialMovingAverage(decay=1 - self._config.tau)          # soft replacement
 
         def ema_getter(getter, name, *args, **kwargs):
             return ema.average(getter(name, *args, **kwargs))
@@ -64,12 +47,12 @@ class DDPG(object):
         q_ = self._build_c(self.S_, a_, reuse=True, custom_getter=ema_getter)
 
         a_loss = - tensorflow.reduce_mean(q)  # maximize the q
-        self.atrain = tensorflow.train.AdamOptimizer(LR_A).minimize(a_loss, var_list=a_params)
+        self.atrain = tensorflow.train.AdamOptimizer(self._config.lr_a).minimize(a_loss, var_list=a_params)
 
         with tensorflow.control_dependencies(target_update):    # soft replacement happened at here
-            q_target = self.R + GAMMA * q_
+            q_target = self.R + self._config.gamma * q_
             td_error = tensorflow.losses.mean_squared_error(labels=q_target, predictions=q)
-            self.ctrain = tensorflow.train.AdamOptimizer(LR_C).minimize(td_error, var_list=c_params)
+            self.ctrain = tensorflow.train.AdamOptimizer(self._config.lr_c).minimize(td_error, var_list=c_params)
 
         self.sess.run(tensorflow.global_variables_initializer())
 
@@ -77,7 +60,7 @@ class DDPG(object):
         return self.sess.run(self.a, {self.S: s[numpy.newaxis, :]})[0]
 
     def learn(self):
-        indices = numpy.random.choice(MEMORY_CAPACITY, size=BATCH_SIZE)
+        indices = numpy.random.choice(self._config.memory_capacity, size=self._config.batch_size)
         bt = self.memory[indices, :]
         bs = bt[:, :self.s_dim]
         ba = bt[:, self.s_dim: self.s_dim + self.a_dim]
@@ -89,21 +72,21 @@ class DDPG(object):
 
     def store_transition(self, s, a, r, s_):
         transition = numpy.hstack((s, a, [r], s_))
-        index = self.pointer % MEMORY_CAPACITY  # replace the old memory with new memory
+        index = self.pointer % self._config.memory_capacity  # replace the old memory with new memory
         self.memory[index, :] = transition
         self.pointer += 1
 
     def _build_a(self, s, reuse=None, custom_getter=None):
         trainable = True if reuse is None else False
         with tensorflow.variable_scope('Actor', reuse=reuse, custom_getter=custom_getter):
-            net = tensorflow.layers.dense(s, 30, activation=tensorflow.nn.relu, name='l1', trainable=trainable)
+            net = tensorflow.layers.dense(s, self._config.model_capacity, activation=tensorflow.nn.relu, name='l1', trainable=trainable)
             a = tensorflow.layers.dense(net, self.a_dim, activation=tensorflow.nn.tanh, name='a', trainable=trainable)
             return tensorflow.clip_by_value(a, self.a_bound[0, :], self.a_bound[1, :], name='clipped_a')
 
     def _build_c(self, s, a, reuse=None, custom_getter=None):
         trainable = True if reuse is None else False
         with tensorflow.variable_scope('Critic', reuse=reuse, custom_getter=custom_getter):
-            n_l1 = 30
+            n_l1 = self._config.model_capacity
             w1_s = tensorflow.get_variable('w1_s', [self.s_dim, n_l1], trainable=trainable)
             w1_a = tensorflow.get_variable('w1_a', [self.a_dim, n_l1], trainable=trainable)
             b1 = tensorflow.get_variable('b1', [1, n_l1], trainable=trainable)

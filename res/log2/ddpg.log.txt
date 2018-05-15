@@ -1,0 +1,168 @@
+In [49]: tensorflow.reset_default_graph()
+    ...: config = ddpg.experiment.Config()
+    ...: config.memory_capacity = 1000
+    ...: experiment = ddpg.experiment.Experiment(config)
+    ...: experiment.train()
+
+{'episode': 0, 'reward': -618.7158203125, 'uniform_ratio': 1, 'var': 3}
+{'episode': 1, 'reward': -11092.5244140625, 'uniform_ratio': 1, 'var': 3}
+{'episode': 2, 'reward': 11711.240234375, 'uniform_ratio': 1, 'var': 3}
+{'episode': 3, 'reward': -6242.9990234375, 'uniform_ratio': 1, 'var': 3}
+{'episode': 4, 'reward': 16533.396484375, 'uniform_ratio': 1, 'var': 3}
+{'episode': 5,
+ 'reward': -9958.384796142578,
+ 'uniform_ratio': 0.9048147898403269,
+ 'var': 2.7144443695209794}
+{'episode': 6,
+ 'reward': 66763.76858520508,
+ 'uniform_ratio': 0.8186898039137951,
+ 'var': 2.4560694117413844}
+{'episode': 7,
+ 'reward': -71604.0634765625,
+ 'uniform_ratio': 0.7407626428726788,
+ 'var': 2.222287928618032}
+{'episode': 8,
+ 'reward': 5256.6876220703125,
+ 'uniform_ratio': 0.6702529950324074,
+ 'var': 2.010758985097218}
+{'episode': 9,
+ 'reward': -3073.9725341796875,
+ 'uniform_ratio': 0.606454822840097,
+ 'var': 1.8193644685202868}
+{'episode': 10,
+ 'reward': -2674.432861328125,
+ 'uniform_ratio': 0.548729293075715,
+ 'var': 1.6461878792271416}
+{'episode': 11,
+ 'reward': -1376.26708984375,
+ 'uniform_ratio': 0.49649837999353363,
+ 'var': 1.4894951399805985}
+{'episode': 12,
+ 'reward': -14708.23876953125,
+ 'uniform_ratio': 0.44923907734991153,
+ 'var': 1.3477172320497302}
+{'episode': 13,
+ 'reward': 12227.6025390625,
+ 'uniform_ratio': 0.406478161360422,
+ 'var': 1.2194344840812639}
+{'episode': 14,
+ 'reward': 6856.9033203125,
+ 'uniform_ratio': 0.3677874521460121,
+ 'var': 1.1033623564380353}
+{'episode': 15,
+ 'reward': 11692.9951171875,
+ 'uniform_ratio': 0.3327795262194029,
+ 'var': 0.9983385786582072}
+{'episode': 16,
+ 'reward': -1379.3603515625,
+ 'uniform_ratio': 0.3011038370793723,
+ 'var': 0.9033115112381153}
+{'episode': 17,
+ 'reward': -3208.2275390625,
+ 'uniform_ratio': 0.27244320506708813,
+ 'var': 0.8173296152012619}
+{'episode': 18,
+ 'reward': 1973.56201171875,
+ 'uniform_ratio': 0.24651064133620196,
+ 'var': 0.7395319240086043}
+{'episode': 19,
+ 'reward': 8462.43310546875,
+ 'uniform_ratio': 0.22304647413401948,
+ 'var': 0.6691394224020573}
+{'episode': 20,
+ 'reward': -13574.156005859375,
+ 'uniform_ratio': 0.2018157486181985,
+ 'var': 0.605447245854595}
+{'episode': 21,
+ 'reward': -3517.743408203125,
+ 'uniform_ratio': 0.1826058741724434,
+ 'var': 0.5478176225173291}
+{'episode': 22,
+ 'reward': 1550.4970703125,
+ 'uniform_ratio': 0.1652244956629483,
+ 'var': 0.4956734869888445}
+{'episode': 23,
+ 'reward': 10511.533203125,
+ 'uniform_ratio': 0.1494975673197442,
+ 'var': 0.44849270195923285}
+{'episode': 24,
+ 'reward': 36276.162109375,
+ 'uniform_ratio': 0.13526760995605422,
+ 'var': 0.40580282986816313}
+{'episode': 25,
+ 'reward': -46787.6953125,
+ 'uniform_ratio': 0.12239213407459068,
+ 'var': 0.36717640222377174}
+{'episode': 26,
+ 'reward': 26552.09375,
+ 'uniform_ratio': 0.11074221307080971,
+ 'var': 0.33222663921242923}
+{'episode': 27,
+ 'reward': -26552.09375,
+ 'uniform_ratio': 0.1002011922461172,
+ 'var': 0.30060357673835153}
+{'episode': 28,
+ 'reward': 46787.6953125,
+ 'uniform_ratio': 0.09066352070392071,
+ 'var': 0.271990562111762}
+{'episode': 29,
+ 'reward': -29727.486328125,
+ 'uniform_ratio': 0.0820336944319021,
+ 'var': 0.246101083295706}
+{'episode': 30,
+ 'reward': 7930.017578125,
+ 'uniform_ratio': 0.07422529998722693,
+ 'var': 0.2226758999616808}
+{'episode': 31,
+ 'reward': 7887.71484375,
+ 'uniform_ratio': 0.06716014920877787,
+ 'var': 0.2014804476263337}
+{'episode': 32,
+ 'reward': 13909.75390625,
+ 'uniform_ratio': 0.06076749629198526,
+ 'var': 0.18230248887595604}
+{'episode': 33,
+ 'reward': 0.0,
+ 'uniform_ratio': 0.05498332938655545,
+ 'var': 0.16494998815966655}
+{'episode': 34,
+ 'reward': 0.0,
+ 'uniform_ratio': 0.04974972962361759,
+ 'var': 0.149249188870853}
+{'episode': 35,
+ 'reward': 0.0,
+ 'uniform_ratio': 0.04501429115400657,
+ 'var': 0.13504287346201993}
+{'episode': 36,
+ 'reward': 0.0,
+ 'uniform_ratio': 0.04072959639032367,
+ 'var': 0.12218878917097123}
+{'episode': 37,
+ 'reward': 0.0,
+ 'uniform_ratio': 0.03685274119819199,
+ 'var': 0.11055822359457636}
+{'episode': 38,
+ 'reward': 0.0,
+ 'uniform_ratio': 0.03334490528228201,
+ 'var': 0.10003471584684638}
+{'episode': 39,
+ 'reward': 0.0,
+ 'uniform_ratio': 0.03017096346523357,
+ 'var': 0.0905128903957011}
+{'episode': 40,
+ 'reward': 0.0,
+ 'uniform_ratio': 0.027299133967075482,
+ 'var': 0.0818974019012267}
+{'episode': 41,
+ 'reward': 0.0,
+ 'uniform_ratio': 0.02470066016324227,
+ 'var': 0.07410198048972715}
+{'episode': 42,
+ 'reward': 0.0,
+ 'uniform_ratio': 0.022349522634521363,
+ 'var': 0.06704856790356445}
+{'episode': 43,
+ 'reward': 0.0,
+ 'uniform_ratio': 0.02022217862558603,
+ 'var': 0.06066653587675851}
+

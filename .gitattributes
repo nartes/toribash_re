@@ -1,1 +1,2 @@
 *.rpl	binary
+res/log?/ddpg.log.txt binary
