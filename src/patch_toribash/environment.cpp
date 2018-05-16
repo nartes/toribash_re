@@ -149,8 +149,23 @@ void Environment::_dump_state()
 
         st.players[p].score = lua_tonumber(_lua_state, -1);
 
+        lua_pop(_lua_state, 1);
+
+        lua_getfield(_lua_state, lua_gettop(_lua_state), "injury");
+
+        st.players[p].score = lua_tonumber(_lua_state, -1);
+
         lua_pop(_lua_state, 2);
     }
+
+    lua_getglobal(_lua_state, "get_world_state");
+    lua_call(_lua_state, 0, 1);
+
+    lua_getfield(_lua_state, lua_gettop(_lua_state), "match_frame");
+
+    st.world_state.match_frame = lua_tointeger(_lua_state, -1);
+
+    lua_pop(_lua_state, 2);
 
     send_message(TORIBASH_STATE, &st);
 }

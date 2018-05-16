@@ -11,14 +11,23 @@ class message_t(enum.Enum):
     TORIBASH_ACTION         = 2
     TORIBASH_LUA_DOSTRING   = 3
 
+class toribash_world_state_t(ctypes.Structure):
+    _fields_ = [('match_frame', ctypes.c_int32)]
+
 class toribash_state_t(ctypes.Structure):
     class player_t(ctypes.Structure):
         _fields_ = [
             ('joints', ctypes.c_int32 * 20),
             ('grips', ctypes.c_int32 * 2),
-            ('score', ctypes.c_double)]
+            ('score', ctypes.c_double),
+            ('injury', ctypes.c_double),
+            ]
 
-    _fields_ = [('players', player_t * 2)]
+    _pack_ = 1
+
+    _fields_ = [
+        ('players', player_t * 2),
+        ('world_state', toribash_world_state_t)]
 
     def to_tensor(self):
         return numpy.concatenate([
@@ -37,7 +46,7 @@ class toribash_action_t(ctypes.Structure):
     _fields_ = [('players', player_t * 2)]
 
     DIM = (20 + 2) * 2
-    BOUNDS = numpy.array(([[1,4],] * 20 + [[1,2],] * 2) * 2, dtype=numpy.int32)
+    BOUNDS = numpy.array(([[1,4],] * 20 + [[0,1],] * 2) * 2, dtype=numpy.int32)
 
     def to_tensor(self):
         return numpy.concatenate([

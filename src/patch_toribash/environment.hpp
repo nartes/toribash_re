@@ -22,13 +22,20 @@ typedef enum message_t
     TORIBASH_LUA_DOSTRING   = 3,
 } message_e;
 
+struct toribash_world_state_t
+{
+    std::int32_t match_frame;
+};
+
 typedef struct toribash_state_t
 {
     struct player {
         int joints[20];
         int grips[2];
         double score;
+        double injury;
     } players[2];
+    toribash_world_state_t world_state;
 } toribash_state_s;
 
 typedef struct toribash_action_t

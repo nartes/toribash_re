@@ -29,8 +29,8 @@ class Experiment:
         self._env = ddpg.toribash_env.ToribashEnvironment()
 
         self._s_dim = ddpg.toribash_env.toribash_state_t.DIM
-        self._a_dim = ddpg.toribash_env.toribash_action_t.DIM
-        self._a_bound = ddpg.toribash_env.toribash_action_t.BOUNDS.T
+        self._a_dim = ddpg.toribash_env.toribash_action_t.DIM // 2
+        self._a_bound = ddpg.toribash_env.toribash_action_t.BOUNDS[:self._a_dim, :].T
 
         self._ddpg = ddpg.ddpg.DDPG(
             self._a_dim,
@@ -75,10 +75,12 @@ class Experiment:
                 #    env.render()
 
                 # Add exploration noise
+                _a_opponent = numpy.array([4,] * 20 + [0, 0], dtype=numpy.int32)
+
                 _a = self._ddpg.choose_action(s.to_tensor())
 
                 if numpy.random.uniform(0, 1) < self._uniform_ratio:
-                    random_mixture = self._generate_bounaded_uniform(self._a_bound)
+                    random_mixture = self._generate_bounded_uniform(self._a_bound)
                 else:
                     random_mixture = numpy.random.normal(_a, self._var)
 
@@ -87,7 +89,7 @@ class Experiment:
                         self._a_bound[0, :],
                         self._a_bound[1, :]))
 
-                self._env.make_action(numpy.int32(a))
+                self._env.make_action(numpy.concatenate([numpy.int32(a), _a_opponent]))
                 self._env.lua_dostring(b'')
                 s_ = self._env.read_state()
                 r = numpy.abs(
@@ -99,14 +101,12 @@ class Experiment:
 
                 self._ddpg.store_transition(s.to_tensor(), a, r / 10, s_.to_tensor())
 
-                if self._ddpg.pointer > self._config.memory_capacity:
+                if self._ddpg.pointer % self._config.memory_capacity == 0:
                     self._var *= self._config.var_decay
                     self._uniform_ratio *= self._config.uniform_decay
                     self._ddpg.learn()
 
-                if s_.players[0].score == 0 and s_.players[1].score == 0 and \
-                    numpy.all(s_.to_tensor() == initial_state.to_tensor()) and \
-                    ep_reward > 0:
+                if s_.world_state.match_frame == 0:
                     self._log({
                         'episode': i,
                         'reward': ep_reward,
