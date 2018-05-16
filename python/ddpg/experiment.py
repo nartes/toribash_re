@@ -43,7 +43,7 @@ class Experiment:
 
         self._t1 = time.time()
 
-    def _generate_bounaded_uniform(self, _bound):
+    def _generate_bounded_uniform(self, _bound):
         bound = _bound.reshape(2, -1)
 
         res = numpy.empty(bound.shape[1:], dtype=bound.dtype)
