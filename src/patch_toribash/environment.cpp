@@ -153,7 +153,7 @@ void Environment::_dump_state()
 
         lua_getfield(_lua_state, lua_gettop(_lua_state), "injury");
 
-        st.players[p].score = lua_tonumber(_lua_state, -1);
+        st.players[p].injury = lua_tonumber(_lua_state, -1);
 
         lua_pop(_lua_state, 2);
     }
