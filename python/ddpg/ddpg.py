@@ -1,5 +1,6 @@
 import tensorflow
 import numpy
+import pprint
 
 
 class Config:
@@ -34,7 +35,7 @@ class DDPG(object):
         self.R = tensorflow.placeholder(tensorflow.float32, [None, 1], 'r')
 
         self.a = self._build_a(self.S,)
-        q = self._build_c(self.S, self.a, )
+        self._q = self._build_c(self.S, self.a, )
         a_params = tensorflow.get_collection(tensorflow.GraphKeys.TRAINABLE_VARIABLES, scope='Actor')
         c_params = tensorflow.get_collection(tensorflow.GraphKeys.TRAINABLE_VARIABLES, scope='Critic')
         ema = tensorflow.train.ExponentialMovingAverage(decay=1 - self._config.tau)          # soft replacement
@@ -43,21 +44,34 @@ class DDPG(object):
             return ema.average(getter(name, *args, **kwargs))
 
         target_update = [ema.apply(a_params), ema.apply(c_params)]      # soft update operation
-        a_ = self._build_a(self.S_, reuse=True, custom_getter=ema_getter)   # replaced target parameters
-        q_ = self._build_c(self.S_, a_, reuse=True, custom_getter=ema_getter)
+        #a_ = self._build_a(self.S_, reuse=True, custom_getter=ema_getter)   # replaced target parameters
+        #q_ = self._build_c(self.S_, a_, reuse=True, custom_getter=ema_getter)
+        a_ = self._build_a(self.S_, reuse=True)
+        q_ = self._build_c(self.S_, a_, reuse=True)
 
-        a_loss = - tensorflow.reduce_mean(q)  # maximize the q
+        a_loss = - tensorflow.reduce_mean(self._q)  # maximize the q
         self.atrain = tensorflow.train.AdamOptimizer(self._config.lr_a).minimize(a_loss, var_list=a_params)
 
         with tensorflow.control_dependencies(target_update):    # soft replacement happened at here
             q_target = self.R + self._config.gamma * q_
-            td_error = tensorflow.losses.mean_squared_error(labels=q_target, predictions=q)
-            self.ctrain = tensorflow.train.AdamOptimizer(self._config.lr_c).minimize(td_error, var_list=c_params)
+            self._td_error = tensorflow.losses.mean_squared_error(labels=q_target, predictions=self._q)
+
+            adam_optimizer = tensorflow.train.AdamOptimizer(self._config.lr_c)
+            self.ctrain_grads = adam_optimizer.compute_gradients(self._td_error, var_list=c_params)
+            self.ctrain = adam_optimizer.minimize(self._td_error, var_list=c_params)
 
         self.sess.run(tensorflow.global_variables_initializer())
 
     def choose_action(self, s):
         return self.sess.run(self.a, {self.S: s[numpy.newaxis, :]})[0]
+
+    def get_q(self, s, a):
+        return self.sess.run(
+            self._q,
+            {
+                self.S: s[numpy.newaxis, :],
+                self.a: a[numpy.newaxis, :]
+            })[0]
 
     def learn(self):
         indices = numpy.random.choice(self._config.memory_capacity, size=self._config.batch_size)
@@ -68,6 +82,10 @@ class DDPG(object):
         bs_ = bt[:, -self.s_dim:]
 
         self.sess.run(self.atrain, {self.S: bs})
+
+        self.ctrain_grads_tensor = \
+            self.sess.run(self.ctrain_grads, {self.S: bs, self.a: ba, self.R: br, self.S_: bs})
+
         self.sess.run(self.ctrain, {self.S: bs, self.a: ba, self.R: br, self.S_: bs_})
 
     def store_transition(self, s, a, r, s_):

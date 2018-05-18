@@ -104,27 +104,22 @@ void Environment::_dump_state()
             lua_pushnumber(_lua_state, v);
             lua_call(_lua_state, 2, 1);
 
-            int t2 = lua_gettop(_lua_state);
-
-            /*
-            lua_pushnil(_lua_state);
-
-            while (lua_next(_lua_state, t2) != 0)
-            {
-                const char * k2 = lua_tolstring(_lua_state, -2, 0);
-                int vt2 = lua_type(_lua_state, -1);
-                lua_pop(_lua_state, 1);
-
-                printf("[%d, %d] %s : type %d\n",
-                    k, v, k2, vt2);
-            }
-            */
-
-            lua_getfield(_lua_state, t2, "state");
+            lua_getfield(_lua_state, lua_gettop(_lua_state), "state");
 
             st.players[p].joints[v] = lua_tonumber(_lua_state, -1);
 
             lua_pop(_lua_state, 2);
+
+            lua_getglobal(_lua_state, "get_joint_pos");
+            lua_pushnumber(_lua_state, p);
+            lua_pushnumber(_lua_state, v);
+            lua_call(_lua_state, 2, 3);
+
+            st.players[p].joints_pos_3d[v][0] = lua_tonumber(_lua_state, -3);
+            st.players[p].joints_pos_3d[v][1] = lua_tonumber(_lua_state, -2);
+            st.players[p].joints_pos_3d[v][2] = lua_tonumber(_lua_state, -1);
+
+            lua_pop(_lua_state, 3);
         }
 
         int i = 0;

@@ -34,6 +34,7 @@ typedef struct toribash_state_t
         int grips[2];
         double score;
         double injury;
+        double joints_pos_3d[20][3];
     } players[2];
     toribash_world_state_t world_state;
 } toribash_state_s;

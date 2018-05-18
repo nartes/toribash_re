@@ -17,6 +17,8 @@ class Config(ddpg.ddpg.Config):
         self.max_ep_steps = 200
         self.var_decay = 0.9995
         self.uniform_decay = 0.9995
+        self.var = 3
+        self.uniform_ratio = 1
 
 class Experiment:
     def __init__(self, config=Config()):
@@ -38,8 +40,8 @@ class Experiment:
             self._a_bound,
             config=self._config)
 
-        self._var = 3
-        self._uniform_ratio = 1
+        self._var = self._config.var
+        self._uniform_ratio = self._config.uniform_ratio
 
         self._t1 = time.time()
 
@@ -90,18 +92,30 @@ class Experiment:
                         self._a_bound[1, :]))
 
                 self._env.make_action(numpy.concatenate([numpy.int32(a), _a_opponent]))
+
+                _q = self._ddpg.get_q(s.to_tensor(), _a)
+
                 self._env.lua_dostring(b'')
                 s_ = self._env.read_state()
-                r = numpy.abs(
-                    numpy.double(s_.players[0].score) - \
-                    numpy.double(s.players[0].score)) + \
-                    numpy.abs(
-                    numpy.double(s_.players[1].score) - \
-                    numpy.double(s.players[1].score))
+                r = numpy.double(s_.players[0].score) - \
+                    numpy.double(s.players[0].score) + \
+                    numpy.double(s_.players[0].injury) - \
+                    numpy.double(s.players[0].injury) + \
+                    -(numpy.double(s_.players[1].score) - \
+                    numpy.double(s.players[1].score)) + \
+                    -(numpy.double(s_.players[0].injury) - \
+                    numpy.double(s.players[0].injury))
 
-                self._ddpg.store_transition(s.to_tensor(), a, r / 10, s_.to_tensor())
+                pprint.pprint({
+                    'a': a,
+                    '_a': numpy.int32(_a),
+                    '_q': _q,
+                    'r': r,
+                    'ddpg.pointer': self._ddpg.pointer})
 
-                if self._ddpg.pointer % self._config.memory_capacity == 0:
+                self._ddpg.store_transition(s.to_tensor(), a, r, s_.to_tensor())
+
+                if self._ddpg.pointer >= self._config.memory_capacity:
                     self._var *= self._config.var_decay
                     self._uniform_ratio *= self._config.uniform_decay
                     self._ddpg.learn()

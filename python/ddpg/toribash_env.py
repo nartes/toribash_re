@@ -21,6 +21,7 @@ class toribash_state_t(ctypes.Structure):
             ('grips', ctypes.c_int32 * 2),
             ('score', ctypes.c_double),
             ('injury', ctypes.c_double),
+            ('joints_pos_3d', ctypes.c_double * 20 * 3),
             ]
 
     _pack_ = 1
@@ -33,10 +34,15 @@ class toribash_state_t(ctypes.Structure):
         return numpy.concatenate([
             self.players[0].joints,
             self.players[0].grips,
+            [self.players[0].score, self.players[0].injury],
+            numpy.array(self.players[0].joints_pos_3d).reshape(-1),
             self.players[1].joints,
-            self.players[1].grips])
+            self.players[1].grips,
+            [self.players[1].score, self.players[1].injury],
+            numpy.array(self.players[1].joints_pos_3d).reshape(-1),
+            ])
 
-    DIM = (20 + 2) * 2
+    DIM = (20 + 2 + 2 + 20 * 3) * 2
 
 class toribash_action_t(ctypes.Structure):
     class player_t(ctypes.Structure):
