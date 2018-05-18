@@ -112,3 +112,71 @@ class ToribashEnvironment:
             bytes(lua_ds),
             block=True,
             type=message_t.TORIBASH_LUA_DOSTRING.value)
+
+class SimpleEnvironment:
+    def __init__(self):
+        self._edges = [
+            [0, 1, -1],
+            [0, 3, 1],
+            [1, 2, -1],
+            [1, 4, 1],
+            [3, 2, -1],
+            [3, 2, 1],
+            [2, 5, -1],
+            [2, 5, 1],
+            [4, 5, -1],
+            [4, 6, 1]]
+
+        self._values = [
+            [0, 0],
+            [1, 0],
+            [3, 3],
+            [2, 1],
+            [4, 2],
+            [5, -4],
+            [6, 1]
+            ]
+
+        self._s_dim = 1
+        self._a_dim = 1
+        self._a_bound = numpy.array([[0, 1]]).T
+
+        self.reset()
+
+    def get_parameters(self):
+        return self._s_dim, self._a_dim, self._a_bound
+
+    def reset(self):
+        self._state = 0
+        self._reward_sum = 0
+
+    def read_state(self):
+        return numpy.array([self._state], dtype=numpy.float32)
+
+    def make_action(self, _action):
+        action = 2 * numpy.int32(_action)[0] - 1
+
+        a = numpy.array(self._edges)
+        b = numpy.array(self._values)
+
+        i = numpy.where(numpy.logical_and(
+            a[:, 0] == self._state,
+            a[:, 2] == action))[0]
+
+        if len(i) == 0:
+            raise ValueError("Invalid action")
+
+        new_state = a[i[0], 1]
+
+        i2 = numpy.where(b[:, 0] == new_state)[0]
+
+        if len(i2) == 0:
+            raise ValueError("Invalid new_state, no value")
+
+        reward = b[i2[0], 1]
+
+        self._reward_sum += reward
+
+        self._state = new_state
+
+        return self.read_state(), reward

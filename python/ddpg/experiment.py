@@ -45,7 +45,8 @@ class Experiment:
 
         self._t1 = time.time()
 
-    def _generate_bounded_uniform(self, _bound):
+    @staticmethod
+    def _generate_bounded_uniform(_bound):
         bound = _bound.reshape(2, -1)
 
         res = numpy.empty(bound.shape[1:], dtype=bound.dtype)
@@ -133,5 +134,73 @@ class Experiment:
 
                 s = s_
                 #if j == self._config.max_ep_steps - 1:
+
+        print('Running time: ', time.time() - self._t1)
+
+class SimpleExperiment:
+    def __init__(self, config=Config()):
+        self._log_file = tempfile.mktemp(prefix='ddpg-', suffix='.log.txt')
+
+        pprint.pprint({'log': self._log_file})
+
+        self._config = config
+        self._env = ddpg.toribash_env.SimpleEnvironment()
+
+        self._s_dim, self._a_dim, self._a_bound = self._env.get_parameters()
+
+        self._ddpg = ddpg.ddpg.DDPG(
+            self._s_dim,
+            self._a_dim,
+            self._a_bound,
+            config = self._config)
+
+        self._var = self._config.var
+
+        self._t1 = time.time()
+
+    def _log(self, data):
+        with io.open(self._log_file, 'a+') as f:
+            f.write(u'' + json.dumps(data)+'\n')
+
+        pprint.pprint(data)
+
+    def train(self):
+        s = None
+
+        for i in range(self._config.max_episodes):
+            self._env.reset()
+
+            ep_reward = 0
+
+            s = self._env.read_state()
+
+            for j in range(self._config.max_ep_steps):
+                a = self._ddpg.choose_action(s)
+
+                a_tilde = numpy.clip(
+                    numpy.random.normal(a, self._var),
+                    self._a_bound[0, :],
+                    self._a_bound[1, :])
+
+                try:
+                    s_, r = self._env.make_action(a_tilde)
+                except:
+                    break
+
+                self._ddpg.store_transition(s, a, r, s_)
+
+                if self._ddpg.pointer >= self._config.memory_capacity:
+                    self._var *= self._config.var_decay
+                    self._ddpg.learn()
+
+                ep_reward += r
+
+                s = s_
+
+            self._log({
+                'episode': '%d' % i,
+                'reward': '%d' % ep_reward,
+                'var': '%.2lf' % self._var,
+                'ddpg.pointer': '%d' % self._ddpg.pointer})
 
         print('Running time: ', time.time() - self._t1)

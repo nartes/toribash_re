@@ -44,10 +44,8 @@ class DDPG(object):
             return ema.average(getter(name, *args, **kwargs))
 
         target_update = [ema.apply(a_params), ema.apply(c_params)]      # soft update operation
-        #a_ = self._build_a(self.S_, reuse=True, custom_getter=ema_getter)   # replaced target parameters
-        #q_ = self._build_c(self.S_, a_, reuse=True, custom_getter=ema_getter)
-        a_ = self._build_a(self.S_, reuse=True)
-        q_ = self._build_c(self.S_, a_, reuse=True)
+        a_ = self._build_a(self.S_, reuse=True, custom_getter=ema_getter)   # replaced target parameters
+        q_ = self._build_c(self.S_, a_, reuse=True, custom_getter=ema_getter)
 
         a_loss = - tensorflow.reduce_mean(self._q)  # maximize the q
         self.atrain = tensorflow.train.AdamOptimizer(self._config.lr_a).minimize(a_loss, var_list=a_params)
