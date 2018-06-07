@@ -32,17 +32,18 @@ class toribash_state_t(ctypes.Structure):
 
     def to_tensor(self):
         return numpy.concatenate([
+            [self.world_state.match_frame],
             self.players[0].joints,
             self.players[0].grips,
-            [self.players[0].score, self.players[0].injury],
+            #[self.players[0].score, self.players[0].injury],
             numpy.array(self.players[0].joints_pos_3d).reshape(-1),
             self.players[1].joints,
             self.players[1].grips,
-            [self.players[1].score, self.players[1].injury],
+            #[self.players[1].score, self.players[1].injury],
             numpy.array(self.players[1].joints_pos_3d).reshape(-1),
             ])
 
-    DIM = (20 + 2 + 2 + 20 * 3) * 2
+    DIM = 1 + (20 + 2 + 2 * 0 + 20 * 3) * 2
 
 class toribash_action_t(ctypes.Structure):
     class player_t(ctypes.Structure):
@@ -83,27 +84,101 @@ class ToribashEnvironment:
     TORIBASH_MSG_QUEUE_KEY = ctypes.c_int32(0xffaaffbb)
     MAX_MESSAGE_SIZE = 8192
 
-    def __init__(self):
+    def __init__(
+        self,
+        action_filter=numpy.arange(toribash_action_t.BOUNDS.shape[0] // 2, dtype=numpy.int32)):
         self._msg_queue = sysv_ipc.MessageQueue(
             self.TORIBASH_MSG_QUEUE_KEY.value,
             max_message_size = self.MAX_MESSAGE_SIZE)
 
-    def read_state(self):
+        self._next_msg = message_t.TORIBASH_LUA_DOSTRING
+        self._prev_state = None
+        self._cur_state = None
+        self._done = False
+
+        self._terminal_state = numpy.zeros_like(
+            toribash_state_t().to_tensor(), dtype=numpy.float32)
+
+        self._action_filter = action_filter
+        self.state_dim = toribash_state_t.DIM
+        self.action_dim = self._action_filter.size
+        self.action_bound = toribash_action_t.BOUNDS[self._action_filter, :].T
+
+    def close(self):
+        self.reset()
+        self._make_action(toribash_action_t.BOUNDS[:, 0])
+
+    def reset(self):
+
+        while self._cur_state is None or self._cur_state.world_state.match_frame != 0:
+            try :
+                self._make_action(toribash_action_t.BOUNDS[:, 0])
+            except:
+                pass
+
+            try :
+                self._lua_dostring(b'')
+            except:
+                pass
+
+            try :
+                st = self._read_state()
+            except:
+                pass
+
+        self._done = False
+
+        return self._cur_state.to_tensor()
+
+    def _read_state(self):
+        assert self._next_msg == message_t.TORIBASH_STATE
+
         message_buf, message_type = \
             self._msg_queue.receive(block=True, type=message_t.TORIBASH_STATE.value)
 
         assert message_type == message_t.TORIBASH_STATE.value
 
-        st = toribash_state_t.from_buffer_copy(message_buf)
+        self._prev_state = self._cur_state
+        self._cur_state = toribash_state_t.from_buffer_copy(message_buf)
 
-        return st
+        self._next_msg = message_t.TORIBASH_ACTION
 
-    def make_action(self, a_tensor):
+        if self._cur_state.world_state.match_frame == 0 and not self._done:
+            self._done = True
+
+        if self._done:
+            return self._terminal_state.copy(), 0, self._done
+        else:
+            reward = self._cur_state.players[1].injury
+            if self._prev_state is not None:
+                reward -= self._prev_state.players[1].injury
+
+            return self._cur_state.to_tensor(), reward, self._done
+
+    def _make_action(self, a_tensor):
+        assert self._next_msg == message_t.TORIBASH_ACTION
+
         act = toribash_action_t.from_tensor(a_tensor)
 
         self._msg_queue.send(bytes(act), block=True, type=message_t.TORIBASH_ACTION.value)
 
-    def lua_dostring(self, lua_str):
+        self._next_msg = message_t.TORIBASH_LUA_DOSTRING
+
+    def step(self, a_tensor):
+        _a_opponent = numpy.array([3,] * 20 + [0, 0], dtype=numpy.int32)
+
+        a = numpy.concatenate([_a_opponent, _a_opponent])
+        a[self._action_filter] = a_tensor
+
+        self._make_action(a)
+
+        self._lua_dostring(b'')
+
+        return self._read_state() + ({},)
+
+    def _lua_dostring(self, lua_str):
+        assert self._next_msg == message_t.TORIBASH_LUA_DOSTRING
+
         lua_ds = toribash_lua_dostring_t()
         lua_ds.buf = lua_str
         lua_ds.len = len(lua_ds.buf)
@@ -113,29 +188,83 @@ class ToribashEnvironment:
             block=True,
             type=message_t.TORIBASH_LUA_DOSTRING.value)
 
-class SimpleEnvironment:
-    def __init__(self):
-        self._edges = [
-            [0, 1, -1],
-            [0, 3, 1],
-            [1, 2, -1],
-            [1, 4, 1],
-            [3, 2, -1],
-            [3, 2, 1],
-            [2, 5, -1],
-            [2, 5, 1],
-            [4, 5, -1],
-            [4, 6, 1]]
+        self._next_msg = message_t.TORIBASH_STATE
 
-        self._values = [
-            [0, 0],
-            [1, 0],
-            [3, 3],
-            [2, 1],
-            [4, 2],
-            [5, -4],
-            [6, 1]
-            ]
+class SimpleEnvironment:
+    def __init__(self, graph_num=0):
+        self._graphs = {
+            0: {
+                'edges': [
+                    [0, 1, -1],
+                    [0, 3, 1],
+                    [1, 2, -1],
+                    [1, 4, 1],
+                    [3, 2, -1],
+                    [3, 4, 1],
+                    [2, 5, -1],
+                    [2, 5, 1],
+                    [4, 5, -1],
+                    [4, 6, 1],
+                    [5, 7, -1],
+                    [5, 7, 1],
+                    [6, 7, -1],
+                    [6, 7, 1],
+                    ],
+                'values': [
+                    [0, 0],
+                    [1, 0],
+                    [3, 3],
+                    [2, 1],
+                    [4, 2],
+                    [5, -4],
+                    [6, 1],
+                    [7, 0],
+                    ],
+                },
+            1: {
+                'edges': [
+                    [0, 1, -1],
+                    [0, 2, 1],
+                    [1, 3, -1],
+                    [1, 4, 1],
+                    [2, 3, -1],
+                    [2, 4, 1],
+                    [3, 5, -1],
+                    [3, 6, 1],
+                    [4, 5, -1],
+                    [4, 6, 1],
+                    [5, 7, -1],
+                    [5, 8, 1],
+                    [6, 7, -1],
+                    [6, 8, 1],
+                    [7, 9, -1],
+                    [7, 10, 1],
+                    [8, 9, -1],
+                    [8, 10, 1],
+                    [9, 11, -1],
+                    [9, 11, 1],
+                    [10, 11, -1],
+                    [10, 11, 1],
+                ],
+                'values': [
+                    [0, 0],
+                    [1, 1],
+                    [2, 0],
+                    [3, 1],
+                    [4, 0],
+                    [5, 0],
+                    [6, 1],
+                    [7, 1],
+                    [8, 0],
+                    [9, 0],
+                    [10, 1],
+                    [11, 0]
+                ]
+            }
+        }
+
+        self._edges = self._graphs[graph_num]['edges']
+        self._values = self._graphs[graph_num]['values']
 
         self._s_dim = 1
         self._a_dim = 1

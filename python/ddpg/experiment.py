@@ -4,21 +4,29 @@ import pprint
 import tempfile
 import io
 import json
+import matplotlib.pyplot
+import pandas
 
 import ddpg
 
 class Config(ddpg.ddpg.Config):
-    def __init__(self):
-        super(Config, self).__init__()
+    def __init__(self, **kwargs):
+        super(Config, self).__init__(**kwargs)
 
         self.memory_capacity = 10000
-        self.batch_size = 32
+        self.c_batch_size = 32
+        self.a_batch_size = 32
         self.max_episodes = 200
         self.max_ep_steps = 200
         self.var_decay = 0.9995
+        self.var_min = 0.1
+        self.epochs = 3
         self.uniform_decay = 0.9995
         self.var = 3
-        self.uniform_ratio = 1
+        self.uniform_ratio = 0
+        self.dump_transition = False
+        self.filter_validate_only = True
+        self.timesteps = 3
 
 class Experiment:
     def __init__(self, config=Config()):
@@ -30,14 +38,10 @@ class Experiment:
 
         self._env = ddpg.toribash_env.ToribashEnvironment()
 
-        self._s_dim = ddpg.toribash_env.toribash_state_t.DIM
-        self._a_dim = ddpg.toribash_env.toribash_action_t.DIM // 2
-        self._a_bound = ddpg.toribash_env.toribash_action_t.BOUNDS[:self._a_dim, :].T
-
         self._ddpg = ddpg.ddpg.DDPG(
-            self._a_dim,
-            self._s_dim,
-            self._a_bound,
+            self._env.action_dim,
+            self._env.state_dim,
+            self._env.action_bound,
             config=self._config)
 
         self._var = self._config.var
@@ -63,88 +67,124 @@ class Experiment:
         with io.open(self._log_file, 'a+') as f:
             f.write(u'' + json.dumps(data)+'\n')
 
-        pprint.pprint(data)
+        if self._config.filter_validate_only and data['validate'] or \
+            not self._config.filter_validate_only:
+            pprint.pprint(data)
+
+    def show_stat(self):
+        d = None
+        with io.open(self._log_file, 'r') as f:
+            d = pandas.DataFrame([json.loads(o) for o in f.read().split('\n') if len(o) > 0])
+
+        matplotlib.pyplot.plot(d['episode'], d['reward'])
+        matplotlib.pyplot.show()
 
     def train(self):
-        self._env.lua_dostring(b'_toggle_ui()')
-        self._env.lua_dostring(b'')
-        initial_state = self._env.read_state()
-        s = initial_state
+        s = None
+        validate = None
 
         for i in range(self._config.max_episodes):
+            s = self._env.reset()
             ep_reward = 0
+
+            rb = []
+
+            pprint.pprint({'ddpg.pointer': self._ddpg.pointer})
+
+            if i % (self._config.max_episodes // self._config.epochs) == 0 or \
+                i == self._config.max_episodes - 1:
+                validate = True
+            else:
+                validate = False
+
             for j in range(self._config.max_ep_steps):
-                #if RENDER:
-                #    env.render()
-
-                # Add exploration noise
-                _a_opponent = numpy.array([4,] * 20 + [0, 0], dtype=numpy.int32)
-
-                _a = self._ddpg.choose_action(s.to_tensor())
-
-                if numpy.random.uniform(0, 1) < self._uniform_ratio:
-                    random_mixture = self._generate_bounded_uniform(self._a_bound)
+                if j == 0:
+                    multiple_steps_ = [s] * self._config.timesteps
+                elif j < self._config.timesteps:
+                    multiple_steps_ = [rb[0][0]] * (self._config.timesteps - j) + \
+                        [rb[i2][0] for i2 in range(j)]
                 else:
-                    random_mixture = numpy.random.normal(_a, self._var)
+                    multiple_steps_ = [rb[i2][0] for i2 in \
+                        range(j - self._config.timesteps, j)]
+
+                multiple_steps = numpy.stack(multiple_steps_)
+
+                _a = self._ddpg.choose_action(multiple_steps)
+
+                if validate:
+                    random_mixture = _a
+                else:
+                    if numpy.random.uniform(0, 1) < self._uniform_ratio:
+                        random_mixture = self._generate_bounded_uniform(self._a_bound)
+                    else:
+                        random_mixture = numpy.random.normal(_a, self._var)
 
                 a = numpy.round(numpy.clip(
                         numpy.float32(random_mixture),
-                        self._a_bound[0, :],
-                        self._a_bound[1, :]))
+                        self._env.action_bound[0, :],
+                        self._env.action_bound[1, :]))
 
-                self._env.make_action(numpy.concatenate([numpy.int32(a), _a_opponent]))
+                s_, r, done = self._env.step(a)
 
-                _q = self._ddpg.get_q(s.to_tensor(), _a)
+                _q = self._ddpg.get_q(multiple_steps, _a)
 
-                self._env.lua_dostring(b'')
-                s_ = self._env.read_state()
-                r = numpy.double(s_.players[0].score) - \
-                    numpy.double(s.players[0].score) + \
-                    numpy.double(s_.players[0].injury) - \
-                    numpy.double(s.players[0].injury) + \
-                    -(numpy.double(s_.players[1].score) - \
-                    numpy.double(s.players[1].score)) + \
-                    -(numpy.double(s_.players[0].injury) - \
-                    numpy.double(s.players[0].injury))
+                if self._config.dump_transition:
+                    pprint.pprint({
+                        #'a': a,
+                        '_a': numpy.round(_a),
+                        '_q': _q,
+                        'r': r,
+                        #'s': s,
+                        #'s_': s_,
+                        #'j': j,
+                        #'ddpg.pointer': self._ddpg.pointer})
+                        })
 
-                pprint.pprint({
-                    'a': a,
-                    '_a': numpy.int32(_a),
-                    '_q': _q,
-                    'r': r,
-                    'ddpg.pointer': self._ddpg.pointer})
+                rb.append([s, a, r, s_])
 
-                self._ddpg.store_transition(s.to_tensor(), a, r, s_.to_tensor())
-
-                if self._ddpg.pointer >= self._config.memory_capacity:
-                    self._var *= self._config.var_decay
+                if self._ddpg.pointer >= self._config.memory_capacity and \
+                    not validate:
+                    self._var = max(self._var * self._config.var_decay, self._config.var_min)
                     self._uniform_ratio *= self._config.uniform_decay
                     self._ddpg.learn()
 
-                if s_.world_state.match_frame == 0:
+                if done or j == self._config.max_ep_steps - 1:
                     self._log({
                         'episode': i,
                         'reward': ep_reward,
                         'var': self._var,
                         'uniform_ratio': self._uniform_ratio,
-                        'ddpg.pointer': self._ddpg.pointer})
+                        'ddpg.pointer': self._ddpg.pointer,
+                        'validate': validate
+                        })
                     break
                 else:
                     ep_reward += r
 
                 s = s_
-                #if j == self._config.max_ep_steps - 1:
+
+            if not validate:
+                for tr in rb:
+                    r = (ep_reward / len(rb) + tr[2])
+                    if numpy.abs(r) > 1e-6:
+                        r = r / (2 * numpy.abs(ep_reward))
+                    self._ddpg.store_transition(tr[0], tr[1], r, tr[3])
+                
 
         print('Running time: ', time.time() - self._t1)
 
+
 class SimpleExperiment:
-    def __init__(self, config=Config()):
+    def __init__(self, config=Config(), env=None):
         self._log_file = tempfile.mktemp(prefix='ddpg-', suffix='.log.txt')
 
         pprint.pprint({'log': self._log_file})
 
         self._config = config
-        self._env = ddpg.toribash_env.SimpleEnvironment()
+        if env is None:
+            self._env = ddpg.toribash_env.SimpleEnvironment()
+        else:
+            self._env = env
 
         self._s_dim, self._a_dim, self._a_bound = self._env.get_parameters()
 
@@ -162,10 +202,13 @@ class SimpleExperiment:
         with io.open(self._log_file, 'a+') as f:
             f.write(u'' + json.dumps(data)+'\n')
 
-        pprint.pprint(data)
+        if self._config.filter_validate_only and data['validate'] or \
+            not self._config.filter_validate_only:
+            pprint.pprint(data)
 
     def train(self):
         s = None
+        validate = None
 
         for i in range(self._config.max_episodes):
             self._env.reset()
@@ -174,33 +217,66 @@ class SimpleExperiment:
 
             s = self._env.read_state()
 
+            if i % (self._config.max_episodes // self._config.epochs) == 0 or \
+                i == self._config.max_episodes - 1:
+                validate = True
+            else:
+                validate = False
+
             for j in range(self._config.max_ep_steps):
                 a = self._ddpg.choose_action(s)
 
-                a_tilde = numpy.clip(
-                    numpy.random.normal(a, self._var),
-                    self._a_bound[0, :],
-                    self._a_bound[1, :])
+                if not validate:
+                    a_tilde = numpy.clip(
+                        numpy.random.normal(a, self._var),
+                        self._a_bound[0, :],
+                        self._a_bound[1, :])
+                else:
+                    a_tilde = a
 
                 try:
-                    s_, r = self._env.make_action(a_tilde)
-                except:
+                    s_, r = self._env.make_action(numpy.round(a_tilde))
+                except ValueError:
                     break
 
-                self._ddpg.store_transition(s, a, r, s_)
+                if self._config.dump_transition:
+                    pprint.pprint({
+                        's': s,
+                        'a': a,
+                        'a_tilde': a_tilde,
+                        's_': s_,
+                        'r': r})
 
-                if self._ddpg.pointer >= self._config.memory_capacity:
-                    self._var *= self._config.var_decay
-                    self._ddpg.learn()
+                if not validate:
+                    self._ddpg.store_transition(s, a_tilde, r, s_)
+
+                    if self._ddpg.pointer >= self._config.memory_capacity:
+                        self._var = max(self._var * self._config.var_decay, self._config.var_min)
+                        self._ddpg.learn()
 
                 ep_reward += r
 
                 s = s_
 
+            if validate:
+                q_values = self._ddpg.sess.run(self._ddpg._q, {
+                    self._ddpg.S: (numpy.arange(24) % 12)[:, numpy.newaxis],
+                    self._ddpg.a: (numpy.array([0] * 12 + [1] * 12))[:, numpy.newaxis]}) \
+                    .reshape(2,12).T
+                actions = self._ddpg.sess.run(self._ddpg.a, {
+                    self._ddpg.S: numpy.arange(12)[:, numpy.newaxis]})
+            else:
+                q_values = numpy.array([])
+                actions = numpy.array([])
+
             self._log({
                 'episode': '%d' % i,
                 'reward': '%d' % ep_reward,
                 'var': '%.2lf' % self._var,
-                'ddpg.pointer': '%d' % self._ddpg.pointer})
+                'ddpg.pointer': '%d' % self._ddpg.pointer,
+                'validate': validate,
+                'q_values': q_values.tolist(),
+                'actions': [float(v) for v in actions],
+            })
 
         print('Running time: ', time.time() - self._t1)
