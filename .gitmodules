@@ -10,3 +10,6 @@
 [submodule "deps/radare2-r2pipe"]
 	path = deps/radare2-r2pipe
 	url = git@github.com:nartes/radare2-r2pipe.git
+[submodule "deps/keras-rl"]
+	path = deps/keras-rl
+	url = https://github.com/keras-rl/keras-rl

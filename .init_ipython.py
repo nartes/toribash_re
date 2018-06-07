@@ -1,5 +1,8 @@
 import os, sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), 'python')))
+sys.path.append( \
+    os.path.abspath(os.path.join(os.path.dirname(__file__),
+    'deps', 'keras-rl')))
 
 import toribash_rarun
 import _statistics
