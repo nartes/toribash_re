@@ -52,6 +52,9 @@ class KerasRlExperiment:
         actor.add(keras.layers.Dense(300))
         actor.add(keras.layers.Dropout(0.1))
         actor.add(keras.layers.Activation('relu'))
+        actor.add(keras.layers.Dense(300))
+        actor.add(keras.layers.Dropout(0.1))
+        actor.add(keras.layers.Activation('relu'))
         actor.add(keras.layers.Dense(self.nb_actions))
         actor.add(keras.layers.Activation('tanh'))
         print(actor.summary())
@@ -64,15 +67,18 @@ class KerasRlExperiment:
         x = keras.layers.Dense(400)(flattened_observation)
         x = keras.layers.Dropout(0.2)(x)
         x = keras.layers.Activation('relu')(x)
-        x = keras.layers.Dense(400)(flattened_observation)
+        x = keras.layers.Dense(400)(x)
         x = keras.layers.Dropout(0.2)(x)
         x = keras.layers.Activation('relu')(x)
         x = keras.layers.Concatenate()([x, self.action_input])
         x = keras.layers.Dense(400)(x)
         x = keras.layers.Dropout(0.2)(x)
         x = keras.layers.Activation('relu')(x)
+        x = keras.layers.Dense(400)(x)
+        x = keras.layers.Dropout(0.1)(x)
+        x = keras.layers.Activation('relu')(x)
         x = keras.layers.Dense(300)(x)
-        x = keras.layers.Dropout(0.2)(x)
+        x = keras.layers.Dropout(0.1)(x)
         x = keras.layers.Activation('relu')(x)
         x = keras.layers.Dense(300)(x)
         x = keras.layers.Dropout(0.1)(x)
@@ -84,7 +90,7 @@ class KerasRlExperiment:
 
         self.critic = critic
 
-    def init_agent(self, warm_up=200):
+    def init_agent(self, warm_up=5000):
         self.warm_up = warm_up
 
         # Finally, we configure and compile our agent. You can use every built-in Keras optimizer and
