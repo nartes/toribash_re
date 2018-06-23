@@ -1,5 +1,5 @@
 check:
-	sha256sum -c src/toribash.tar.sha256
+	sha256sum -c res/toribash.tar.sha256
 
 recover:
 	rm -Ifr build/toribash
