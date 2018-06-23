@@ -7,10 +7,10 @@ function _toggle_ui()
       set_option("hud", v)
 end
 
-function main()
+function main(msg_queue_key)
     print("init toribash.lua")
 
-    open_url()
+    open_url(msg_queue_key)
     add_hook("enter_freeze", "patch_toribash", patch_toribash_enter_freeze_cb)
     add_hook("end_game", "patch_toribash", patch_toribash_end_game_cb)
     add_hook("new_game", "patch_toribash", patch_toribash_start_game_cb)
@@ -35,5 +35,3 @@ function read_socket()
 end
 
 dofile("dbg.lua")
-
-main()

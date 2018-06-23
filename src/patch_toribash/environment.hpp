@@ -83,7 +83,7 @@ private:
     static Environment * _env;
 
     int _msg_queue_id;
-    const int TORIBASH_MSG_QUEUE_KEY = 0xffaaffbb;
+    int _toribash_msg_queue_key;
 
 
     std::vector<std::uint8_t> out_buffer;

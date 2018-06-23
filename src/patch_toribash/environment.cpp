@@ -17,13 +17,24 @@ Environment* Environment::_env = 0;
 Environment::Environment(lua_State * lua_state)
     : _lua_state(lua_state)
 {
+    int n = lua_gettop(_lua_state);
+
+    if (n == 1)
+    {
+        _toribash_msg_queue_key = lua_tointeger(_lua_state, 1);
+    }
+    else
+    {
+        _toribash_msg_queue_key = 0xffaaffbb;
+    }
+
     _env = this;
 
     while ((_msg_queue_id = msgget(
-        TORIBASH_MSG_QUEUE_KEY,
+        _toribash_msg_queue_key,
         IPC_CREAT | IPC_EXCL | S_IRUSR | S_IWUSR)) == -1)
     {
-        _msg_queue_id = msgget(TORIBASH_MSG_QUEUE_KEY, 0);
+        _msg_queue_id = msgget(_toribash_msg_queue_key, 0);
 
         if (_msg_queue_id == -1 || msgctl(_msg_queue_id, IPC_RMID, 0) == -1)
         {

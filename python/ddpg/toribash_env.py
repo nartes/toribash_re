@@ -81,14 +81,13 @@ class toribash_lua_dostring_t(ctypes.Structure):
         ('buf', ctypes.c_char * 4096)]
 
 class ToribashEnvironment:
-    TORIBASH_MSG_QUEUE_KEY = ctypes.c_int32(0xffaaffbb)
     MAX_MESSAGE_SIZE = 8192
 
-    def __init__(
-        self,
-        action_filter=numpy.arange(toribash_action_t.BOUNDS.shape[0] // 2, dtype=numpy.int32)):
+    def __init__(self, toribash_msg_queue_key=0xffaaffbb):
+        self._toribash_msg_queue_key = ctypes.c_uint32(toribash_msg_queue_key)
+
         self._msg_queue = sysv_ipc.MessageQueue(
-            self.TORIBASH_MSG_QUEUE_KEY.value,
+            self._toribash_msg_queue_key.value,
             max_message_size = self.MAX_MESSAGE_SIZE)
 
         self._next_msg = message_t.TORIBASH_LUA_DOSTRING
@@ -99,16 +98,19 @@ class ToribashEnvironment:
         self._terminal_state = numpy.zeros_like(
             toribash_state_t().to_tensor(), dtype=numpy.float32)
 
-        self._action_filter = action_filter
         self.state_dim = toribash_state_t.DIM
-        self.action_dim = self._action_filter.size
-        self.action_bound = toribash_action_t.BOUNDS[self._action_filter, :].T
+        self.action_bound = toribash_action_t.BOUNDS.T
+        self.action_dim = self.action_bound.shape[1]
 
     def close(self):
         self.reset()
         self._make_action(toribash_action_t.BOUNDS[:, 0])
 
     def reset(self):
+        #if self._next_msg == message_t.TORIBASH_LUA_DOSTRING and \
+        #    self._msg_queue.current_messages == 1:
+        #    self._next_msg = message_t.TORIBASH_ACTION
+        #    self._msg_queue.receive()
 
         while self._cur_state is None or self._cur_state.world_state.match_frame != 0:
             try :
@@ -149,9 +151,10 @@ class ToribashEnvironment:
         if self._done:
             return self._terminal_state.copy(), 0, self._done
         else:
-            reward = self._cur_state.players[1].injury
+            reward = self._cur_state.players[1].injury - self._cur_state.players[0].injury
+
             if self._prev_state is not None:
-                reward -= self._prev_state.players[1].injury
+                reward -= self._prev_state.players[1].injury - self._prev_state.players[0].injury
 
             return self._cur_state.to_tensor(), reward, self._done
 
@@ -165,12 +168,7 @@ class ToribashEnvironment:
         self._next_msg = message_t.TORIBASH_LUA_DOSTRING
 
     def step(self, a_tensor):
-        _a_opponent = numpy.array([3,] * 20 + [0, 0], dtype=numpy.int32)
-
-        a = numpy.concatenate([_a_opponent, _a_opponent])
-        a[self._action_filter] = a_tensor
-
-        self._make_action(a)
+        self._make_action(numpy.int32(a_tensor))
 
         self._lua_dostring(b'')
 
