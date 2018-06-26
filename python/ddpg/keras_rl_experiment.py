@@ -1,5 +1,9 @@
 import numpy
 import scipy
+import io
+import pickle
+import h5py
+
 import keras.models
 import keras.layers
 import keras.optimizers
@@ -87,7 +91,7 @@ class LocalProcessor(rl.core.Processor):
                 numpy.sqrt(numpy.sum(numpy.square(
                     self.goal_pos_3d - \
                     numpy.mean(joints_pos_3d_prev[0], axis=1)))))
-            
+
             reward = (1 if dist_diff > 0 else -1) + \
                 (-1 if injured > 0 else 1)
         else:
@@ -190,10 +194,79 @@ class LocalMemory(rl.memory.SequentialMemory):
         self._iteration = None
         self._batch_size = None
 
+        self.agent = None
+
     def set_agent(self, agent):
         self.agent = agent
 
-    def sample(self, batch_size):
+    def save(self, file_path):
+        with h5py.File(file_path, 'w') as f:
+
+            attrs = {
+                'config': {
+                    'min_train_window_length': self._min_train_window_length,
+                    'max_train_window_length': self._max_train_window_length,
+                    'train_window_length': self._train_window_length,
+                    'annealing_steps': self._annealing_steps,
+                    'step': self._step,
+                    'samples': self._samples,
+                    'iteration': self._iteration,
+                    'batch_size': self._batch_size
+                },
+                'native_config': {
+                    'window_length': self.window_length,
+                    'ignore_episode_boundaries': self.ignore_episode_boundaries,
+                    'limit': self.limit
+                }
+            }
+
+            for k, v in attrs.items():
+                g = f.create_group(k)
+
+                for k, v in v.items():
+                    if v is not None:
+                        g.attrs[k] = v
+
+            g = f.create_group('ring_buffers')
+
+            for k, v in ({
+                    'observations': self.observations,
+                    'terminals': self.terminals,
+                    'actions': self.actions,
+                    'rewards': self.rewards
+                    }).items():
+                g[k] = numpy.stack(v.data)
+
+    def load(self, file_path):
+        self._samples = None
+        self._iteration = None
+        self._batch_size = None
+
+        with h5py.File(file_path, 'r') as f:
+            for k, v in f['config'].attrs.items():
+                if k in [
+                    'min_train_window_length',
+                    'max_train_window_length',
+                    'train_window_length',
+                    'annealing_steps',
+                    'step',
+                    'samples',
+                    'iteration',
+                    'batch_size']:
+                    setattr(self, '_' + k, v)
+
+            for k, v in f['native_config'].attrs.items():
+                if k in ['window_length', 'ignore_episode_boundaries', 'limit']:
+                    setattr(self, k, v)
+
+            for k, v in f['ring_buffers'].items():
+                if k in ['observations', 'terminals', 'actions', 'rewards']:
+                    rb = getattr(self, k)
+                    rb.length = v.shape[0]
+                    rb.maxlen = self.limit
+                    rb.data = [e for e in numpy.array(v)]
+
+    def sample(self, batch_size, validation_split=0.3, is_test=False):
         if self._samples is None or \
             self._iteration == self._train_window_length or \
             self._batch_size != batch_size:
@@ -205,13 +278,25 @@ class LocalMemory(rl.memory.SequentialMemory):
                     self._max_train_window_length,
                     self._train_window_length + 1)
 
-            self.agent.reset_train_states()
+            if self.agent is not None:
+                self.agent.reset_train_states()
 
             self._batch_size = batch_size
-            indexes = rl.memory.sample_batch_indexes(
-                self.window_length + self._train_window_length - 1,
-                self.nb_entries - 1,
-                size=self._batch_size)
+
+            split_index = int(self.nb_entries * (1.0 - validation_split))
+
+            if not is_test:
+                indexes = rl.memory.sample_batch_indexes(
+                    self.window_length + self._train_window_length - 1 + \
+                    split_index,
+                    self.nb_entries - 1,
+                    size=self._batch_size)
+            else:
+                indexes = rl.memory.sample_batch_indexes(
+                    self.window_length + self._train_window_length - 1,
+                    self.nb_entries - 1 - split_index,
+                    size=self._batch_size)
+
             batch_idxs = []
             for i in indexes:
                 for k in range(-self._train_window_length + 1, 1):
@@ -227,6 +312,37 @@ class LocalMemory(rl.memory.SequentialMemory):
         self._iteration += 1
 
         return ret
+
+    def sample_to_critic_batch(self, sample):
+        return [ \
+            numpy.stack([o.action for o in sample]), \
+            numpy.stack([numpy.stack(o.state0) for o in sample]), \
+        ], \
+            keras.utils.to_categorical(
+                numpy.stack([o.reward for o in sample]), 5)
+
+
+class KerasSequence(keras.utils.Sequence):
+    def __init__(self, m, batch_size, validation_split, length):
+        self._m = m
+        self._batch_size = batch_size
+        self._validation_split = validation_split
+        self._length = length
+
+    def __len__(self):
+        return self._length
+
+    def __getitem__(self, idx):
+        if idx < self._length * self._validation_split:
+            return self._m.sample(
+                batch_size=self._batch_size,
+                validation_split=self._validation_split,
+                is_test=False)
+        else:
+            return self._m.sample(
+                batch_size=self._batch_size,
+                validation_split=self._validation_split,
+                is_test=True)
 
 
 class LocalAgent(rl.agents.DDPGAgent):
@@ -314,17 +430,23 @@ class KerasRlExperiment:
             else:
                 actor_input = keras.layers.Input(shape=(self.window_length, self.processor.state_dim))
 
-            x = keras.layers.TimeDistributed(keras.layers.Dense(32 << self.capacity))(actor_input)
+            #x = keras.layers.TimeDistributed(keras.layers.Dense(32 << self.capacity))(actor_input)
+            #x = keras.layers.Dropout(0.3)(x)
+
+            #x = keras.layers.RNN(
+            #    [keras.layers.LSTMCell(32 << self.capacity, dropout=0.3) \
+            #    for k in range(3)],
+            #    stateful=True if i == 0 else False) \
+            #    (x)
+
+            #x = keras.layers.Dense(self.nb_actions)(x)
+            #x = keras.layers.Activation('tanh')(x)
+
+            x = keras.layers.Flatten()(actor_input)
             x = keras.layers.Dropout(0.3)(x)
-
-            x = keras.layers.RNN(
-                [keras.layers.LSTMCell(32 << self.capacity, dropout=0.3) \
-                for k in range(3)],
-                stateful=True if i == 0 else False) \
-                (x)
-
-            x = keras.layers.Dense(self.nb_actions)(x)
-            x = keras.layers.Activation('tanh')(x)
+            x = keras.layers.Dense(128, activation='relu')(x)
+            x = keras.layers.Dropout(0.3)(x)
+            x = keras.layers.Dense(self.nb_actions, activation='tanh')(x)
 
             actor = keras.models.Model(inputs=actor_input, outputs=x)
 
@@ -332,18 +454,29 @@ class KerasRlExperiment:
 
             self.actors.append(actor)
 
-        x = keras.layers.TimeDistributed(
-            keras.layers.Dense(32 << self.capacity))(self.observation_input)
+        #x = keras.layers.TimeDistributed(
+        #    keras.layers.Dense(32 << self.capacity))(self.observation_input)
+        #x = keras.layers.Dropout(0.3)(x)
+        #x2 = keras.layers.Dense(32 << self.capacity)(self.action_input)
+        #x2 = keras.layers.Dropout(0.3)(x2)
+        #x2 = keras.layers.RepeatVector(self.window_length)(x2)
+        #x = keras.layers.Concatenate()([x, x2])
+        #x = keras.layers.RNN(
+        #    [keras.layers.LSTMCell(32 << self.capacity, dropout=0.3) for k in range(3)],
+        #    stateful=True)(x)
+        #x = keras.layers.Dense(1)(x)
+        #x = keras.layers.Activation('linear')(x)
+
+        x = keras.layers.Concatenate()([ \
+            keras.layers.Flatten()(self.observation_input),
+            self.action_input])
         x = keras.layers.Dropout(0.3)(x)
-        x2 = keras.layers.Dense(32 << self.capacity)(self.action_input)
-        x2 = keras.layers.Dropout(0.3)(x2)
-        x2 = keras.layers.RepeatVector(self.window_length)(x2)
-        x = keras.layers.Concatenate()([x, x2])
-        x = keras.layers.RNN(
-            [keras.layers.LSTMCell(32 << self.capacity, dropout=0.3) for k in range(3)],
-            stateful=True)(x)
-        x = keras.layers.Dense(1)(x)
-        x = keras.layers.Activation('linear')(x)
+        x = keras.layers.Dense(128, activation='relu')(x)
+        x = keras.layers.Dropout(0.3)(x)
+        x = keras.layers.Dense(128, activation='relu')(x)
+        x = keras.layers.Dropout(0.3)(x)
+        x = keras.layers.Dense(5, activation='softmax')(x)
+
         critic = keras.models.Model(inputs=[self.action_input, self.observation_input], outputs=x)
         print(critic.summary())
 

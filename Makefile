@@ -1,10 +1,11 @@
 check:
-	sha256sum -c res/toribash.tar.sha256
+	sha256sum -c res/toribash.tar.xz.sha256
+	sha256sum -c res/memory-1280000.hdf5.xz.sha256
 
 recover:
 	rm -Ifr build/toribash
 	mkdir -p build/toribash
-	tar --strip-components 1 -C build/toribash -xvf $$PWD/tmp/toribash.tar
+	tar --strip-components 1 -C build/toribash -xvf $$PWD/tmp/toribash.tar.xz
 
 clean:
 	rm -fr build/*
