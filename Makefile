@@ -1,6 +1,5 @@
 check:
-	sha256sum -c res/toribash.tar.xz.sha256
-	sha256sum -c res/memory-1280000.hdf5.xz.sha256
+	sha256sum -c res/large_files.sha256.txt
 
 recover:
 	rm -Ifr build/toribash
