@@ -717,7 +717,8 @@ class Helpers:
         self,
         model,
         batch_size=64,
-        dataset_split=0.4):
+        dataset_split=0.4,
+        epochs=10):
 
         self.model = model
 
@@ -730,13 +731,14 @@ class Helpers:
                 (batch_size=batch_size, is_test=True, dataset_split=dataset_split), []),
             steps_per_epoch=train_steps,
             validation_steps=test_steps,
-            epochs=60)
+            epochs=epochs)
 
     def train_regression(
         self,
         model,
         batch_size=64,
-        dataset_split=0.4):
+        dataset_split=0.4,
+        epochs=10):
 
         self.model = model
 
@@ -749,7 +751,7 @@ class Helpers:
                 (batch_size=batch_size, is_test=True, dataset_split=dataset_split), []),
             steps_per_epoch=train_steps,
             validation_steps=test_steps,
-            epochs=60)
+            epochs=epochs)
 
 
 
