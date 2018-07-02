@@ -34,11 +34,11 @@ os.environ['RPDB_GIT'] = os.path.join(
 os.environ['AUTOPEP8_BINARY'] = os.environ.get('AUTOPEP8_BINARY') or\
     sys.executable + " -m autopep8"
 
-for p, e in [(os.environ['R2_PIPE_GIT'], 'Warning: not found GIT r2pipe'),
-             (os.environ['RPDB_GIT'], 'Warning: not found GIT rpdb')]:
+for p, e in [(os.environ['R2_PIPE_GIT'], 'not found GIT r2pipe'),
+             (os.environ['RPDB_GIT'], 'not found GIT rpdb')]:
     try:
         if not os.path.exists(p):
-            raise ValueError(r"The Path doesn't exists %s" % k)
+            raise ValueError(r"path doesn't exist %s, %s" % (p, e))
         else:
             sys.path.insert(0, p)
 
