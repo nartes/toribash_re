@@ -6,7 +6,7 @@
 	url = https://github.com/nartes/radare2book
 [submodule "deps/radare2"]
 	path = deps/radare2
-	url = https://github.com/nartes/radare2
+	url = https://github.com/radare/radare2
 [submodule "deps/radare2-r2pipe"]
 	path = deps/radare2-r2pipe
 	url = https://github.com/nartes/radare2-r2pipe
