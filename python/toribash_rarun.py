@@ -29,7 +29,7 @@ os.environ['R2_PIPE_GIT'] = os.path.join(
     os.environ['TORIBASH_PROJECT_ROOT'], 'deps', 'radare2-r2pipe', 'python')
 
 os.environ['RPDB_GIT'] = os.path.join(
-    os.environ['TORIBASH_PROJECT_ROOT'], '..', 'rpdb')
+    os.environ['TORIBASH_PROJECT_ROOT'], 'deps', 'rpdb')
 
 os.environ['AUTOPEP8_BINARY'] = os.environ.get('AUTOPEP8_BINARY') or\
     sys.executable + " -m autopep8"
