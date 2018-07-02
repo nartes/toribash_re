@@ -3,10 +3,13 @@ import scipy
 import io
 import pickle
 import h5py
+import pandas
 
 import keras.models
 import keras.layers
 import keras.optimizers
+
+import tensorflow
 
 import rl.processors
 import rl.agents
@@ -177,13 +180,14 @@ class LocalProcessor(rl.core.Processor):
 class LocalMemory(rl.memory.SequentialMemory):
     def __init__(
         self,
+        limit,
         min_train_window_length=1,
         train_window_length=32,
         annealing_steps=1000,
         *args,
         **kwargs):
 
-        super(LocalMemory, self).__init__(*args, **kwargs)
+        super(LocalMemory, self).__init__(limit, *args, **kwargs)
 
         self._max_train_window_length = train_window_length
         self._min_train_window_length = 1
@@ -322,6 +326,317 @@ class LocalMemory(rl.memory.SequentialMemory):
                 numpy.stack([o.reward for o in sample]), 5)
 
 
+class RawStatesMemory:
+    def __init__(self, rs, window_length=1):
+        self.raw_states = rs
+        self.window_length = window_length
+        self._train_window_length = 1
+        self.d = pandas.DataFrame({
+            'injuries': numpy.array([rs.players[0].injury for rs in self.raw_states])})
+        self.d['diff_injuries'] = self.d['injuries']
+        self.d['diff_injuries'].iloc[1:] = self.d['injuries'].diff()
+        self.d['match_frame'] = numpy.array([rs.world_state.match_frame for rs in self.raw_states])
+        self.d['id'] = self.d.index
+
+    @property
+    def nb_entries(self):
+        return len(self.raw_states)
+
+    def raw_state_to_x_and_y(self, idxs):
+        injury_diff = numpy.diff(
+            numpy.array([self.raw_states[k].players[0].injury for k in \
+                [idxs[-1] - 1 if idxs[-1] > 0 else idxs[-1], idxs[-1]]]))
+
+        x = numpy.stack([numpy.array(self.raw_states[k].players[0].joints_pos_3d) for k in idxs])
+
+        return x, [injury_diff[0], numpy.mean(x, axis=2)]
+
+    def sample(self, batch_size, validation_split=0.3, is_test=False):
+        self._batch_size = batch_size
+
+        split_index = int(self.nb_entries * (1.0 - validation_split))
+
+        if not is_test:
+            indexes = rl.memory.sample_batch_indexes(
+                self.window_length + self._train_window_length - 1 + \
+                split_index,
+                self.nb_entries - 1,
+                size=self._batch_size)
+        else:
+            indexes = rl.memory.sample_batch_indexes(
+                self.window_length + self._train_window_length - 1,
+                self.nb_entries - 1 - split_index,
+                size=self._batch_size)
+
+        X = []
+        Y = None
+
+        for i in indexes:
+            x, y = self.raw_state_to_x_and_y(numpy.arange(i - self.window_length + 1, i + 1))
+
+            X.append(x)
+
+            if Y is None:
+                Y = []
+                for k in range(len(y)):
+                    Y.append([])
+
+            for k in range(len(y)):
+                Y[k].append(y[k])
+
+        return numpy.stack(X), [numpy.stack(y) for y in Y]
+
+    def prioritized_sample(
+        self,
+        batch_size,
+        validation_split=0.3,
+        dataset_split=1.0,
+        is_test=False):
+
+        indexes = []
+
+        self._d2 = getattr(self, '_d2', {True: None, False: None})
+
+        if self._d2[is_test] is None:
+            if not is_test:
+                td = self.d.iloc[:int(self.d.shape[0] * dataset_split)]
+                self._d2[is_test] = \
+                    {'raw': \
+                        td.iloc[:-int(td.shape[0] * validation_split)]}
+            else:
+                td = self.d.iloc[:int(self.d.shape[0] * dataset_split)]
+                self._d2[is_test] = \
+                    {'raw': \
+                        td.iloc[-int(td.shape[0] * validation_split):]}
+
+        d2 = self._d2[is_test]
+
+        d2['groups'] = d2.get('groups', {'no_reward': None, 'positive_reward': None})
+
+        groups = d2['groups']
+
+        if groups['no_reward'] is None:
+            groups['no_reward'] = d2['raw'][d2['raw']['diff_injuries'] > 0]
+
+        if groups['positive_reward'] is None:
+            groups['positive_reward'] = d2['raw'][d2['raw']['diff_injuries'] == 0]
+
+        self.group_type_uniform = getattr(
+            self,
+            'group_type_uniform',
+            add_uniform(['no_reward', 'positive_reward']))
+
+        rand_keys = {}
+        rand_keys_pos = {}
+        rand_ids = {}
+
+        for k in groups.keys():
+            rand_keys[k] = numpy.random.randint(0, groups[k].shape[0], batch_size * 10)
+            rand_keys_pos[k] = 0
+            rand_ids[k] = groups[k]['id'].iloc[rand_keys[k]].values
+
+        X = ([], [])
+        Y = []
+
+        while len(indexes) < batch_size:
+            group_type = self.group_type_uniform()[0]
+
+            while True:
+                assert rand_keys_pos[group_type] < rand_ids[group_type].shape[0]
+
+                i = rand_ids[group_type][rand_keys_pos[group_type]]
+                rand_keys_pos[group_type] += 1
+
+                is_to_continue = False
+
+                for k in range(i - self.window_length, i):
+                    if k < 0 or self.d['match_frame'].values[k] == 0:
+                        is_to_continue = True
+                        break
+
+                if is_to_continue:
+                    continue
+
+                indexes.append(i)
+
+                x = numpy.stack(sum([
+                    [numpy.array(self.raw_states[k].players[p].joints_pos_3d) \
+                        for p in range(2)] for k in range(i - self.window_length, i)], []))
+
+                X[0].append(numpy.random.normal(x, 1e-3))
+
+                d = numpy.empty((self.window_length, (2 * 20) ** 2, 3), dtype=numpy.float16)
+                w, p1, p2, j1, j2 = numpy.meshgrid(
+                    range(self.window_length),
+                    range(2),
+                    range(2),
+                    range(20),
+                    range(20))
+
+                w = w.flatten()
+                p1 = p1.flatten()
+                p2 = p2.flatten()
+                j1 = j1.flatten()
+                j2 = j2.flatten()
+
+                d[w, (j1 + 20 * p1) * 40 + (j2 + 20 * p2)] = x[w + p1, :, j1] - x[w + p2, :, j2]
+
+                X[1].append(numpy.random.normal(d, 1e-3))
+
+                break
+
+        Y = self.d['diff_injuries'].values[indexes]
+
+        return [numpy.stack(x) for x in X], Y
+
+    def prioritized_sample_classification(self, **kwargs):
+        b = self.prioritized_sample(**kwargs)
+
+        i = b[1] > 0
+        b[1][i] = 1
+        b[1][~i] = 0
+
+        return b[0], keras.utils.to_categorical(b[1], 2)
+
+
+class Critics:
+    def __init__(
+        self,
+        state_shape=(3, 20),
+        mutual_dist_feature_input=((20 * 2) ** 2, 3),
+        batch_size=32,
+        window_length=1):
+
+        self.state_shape = state_shape
+        self.mutual_dist_feature_input = mutual_dist_feature_input
+        self.batch_size = batch_size
+        self.window_length = window_length
+
+    def model1(
+        self,
+        qvalue_shape=[(1,), (1,3)]):
+
+        state_input = keras.layers.Input(
+            batch_shape=(self.batch_size, self.window_length) + self.state_shape,
+            name='state_input')
+
+        x = keras.layers.Conv2D(
+            64,
+            (3, 3),
+            data_format='channels_first')(state_input)
+        #x = keras.layers.Reshape(
+        #    (window_length, numpy.prod(state_shape)))(state_input)
+        y0 = keras.layers.Dense(256, activation='tanh')(x)
+        y0 = keras.layers.Flatten()(y0)
+        y0 = keras.layers.Dense(qvalue_shape[0][0], activation='linear')(y0)
+
+        assert qvalue_shape[1][0] == self.window_length
+
+        y1 = keras.layers.Reshape((self.window_length, -1))(x)
+        y1 = keras.layers.TimeDistributed(keras.layers.Dense(qvalue_shape[1][1]))(y1)
+
+        model = keras.models.Model(inputs=[state_input], outputs=[y0, y1])
+
+        model.summary()
+
+        return model
+
+    def model2(self):
+        state_input = keras.layers.Input(
+            batch_shape=(self.batch_size, 2 * self.window_length) + self.state_shape,
+            name='state_input')
+
+        mutual_dist_feature_input = keras.layers.Input(
+            batch_shape=(self.batch_size, self.window_length,) + self.mutual_dist_feature_input,
+            name='mutual_dist_feature_input')
+
+        x = keras.layers.Flatten()(state_input)
+        x = keras.layers.Dense(64, activation='selu')(x)
+        x = keras.layers.Dropout(0.2)(x)
+
+        #x2 = keras.layers.Conv2D(
+        #    64,
+        #    (3, 3),
+        #    data_format='channels_first',
+        #    activation='selu')(mutual_dist_feature_input)
+        #x2 = keras.layers.MaxPooling2D(pool_size=(3, 1), data_format='channels_first')(x2)
+        #x2 = keras.layers.Conv2D(64, (16, 1), data_format='channels_first', activation='selu')(x2)
+        #x2 = keras.layers.MaxPooling2D(pool_size=(16, 1), data_format='channels_first')(x2)
+        #x2 = keras.layers.Conv2D(64, (16, 1), data_format='channels_first', activation='selu')(x2)
+        #x2 = keras.layers.MaxPooling2D(pool_size=(16, 1), data_format='channels_first')(x2)
+        #x2 = keras.layers.Dropout(0.1)(x2)
+
+        #x2 = keras.layers.Conv2D(2, (4, 3), data_format='channels_first',
+        #        activation='selu')(mutual_dist_feature_input)
+        #x2 = keras.layers.MaxPooling2D(pool_size=(32, 1), data_format='channels_first')(x2)
+        x2 = keras.layers.Flatten()(mutual_dist_feature_input)
+        x2 = keras.layers.Dense(64, activation='selu')(x2)
+        x2 = keras.layers.Dropout(0.2)(x2)
+
+        x3 = keras.layers.Concatenate()([x, x2])
+        y = keras.layers.Dense(64, activation='selu')(x3)
+        y = keras.layers.Dropout(0.2)(y)
+        y = keras.layers.Dense(2, activation='softmax')(y)
+
+        model = keras.models.Model(inputs=[state_input, mutual_dist_feature_input], outputs=y)
+
+        model.summary()
+
+        return model
+
+    def slice_batches_across_devices(self, model, worker_devices, master_cpu):
+        def get_slice(data, i, parts):
+            shape = tensorflow.shape(data)
+            batch_size = shape[:1]
+            input_shape = shape[1:]
+            step = batch_size // parts
+            if i == len(worker_devices) - 1:
+                size = batch_size - step * i
+            else:
+                size = step
+            size = tensorflow.concat([size, input_shape], axis=0)
+            stride = tensorflow.concat([step, input_shape * 0], axis=0)
+            start = stride * i
+            return tensorflow.slice(data, start, size)
+
+        all_outputs = []
+        for i in range(len(model.outputs)):
+            all_outputs.append([])
+
+        # Place a copy of the model on each GPU,
+        # each getting a slice of the inputs.
+        for i, dev in enumerate(worker_devices):
+            with tensorflow.device(dev.name):
+                with tensorflow.name_scope('replica_%d' % i):
+                    inputs = []
+                    # Retrieve a slice of the input.
+                    for x in model.inputs:
+                        input_shape = tuple(x.get_shape().as_list())[1:]
+                        slice_i = keras.layers.Lambda(get_slice,
+                                         output_shape=input_shape,
+                                         arguments={'i': i,
+                                                    'parts': len(worker_devices)})(x)
+                        inputs.append(slice_i)
+
+                    # Apply model on slice
+                    # (creating a model replica on the target device).
+                    outputs = model(inputs)
+                    if not isinstance(outputs, list):
+                        outputs = [outputs]
+
+                    # Save the outputs for merging back together later.
+                    for o in range(len(outputs)):
+                        all_outputs[o].append(outputs[o])
+
+        # Merge outputs on CPU.
+        with tensorflow.device(master_cpu.name):
+            merged = []
+            for name, outputs in zip(model.output_names, all_outputs):
+                merged.append(keras.layers.concatenate(outputs,
+                                          axis=0, name=name))
+            return keras.models.Model(model.inputs, merged)
+
+
 class KerasSequence(keras.utils.Sequence):
     def __init__(self, m, batch_size, validation_split, length):
         self._m = m
@@ -390,13 +705,14 @@ class KerasRlExperiment:
         capacity=2,
         batch_size=128,
         warm_up=10000,
+        window_length=3,
         env=None):
 
         if env is None:
             env = ddpg.toribash_env.ToribashEnvironment()
 
         self.env = env
-        self.window_length = 3
+        self.window_length = window_length
         self.min_train_window_length = 10
         self.train_window_length = 20
         self.batch_size = batch_size
@@ -468,12 +784,18 @@ class KerasRlExperiment:
         #x = keras.layers.Activation('linear')(x)
 
         x = keras.layers.Concatenate()([ \
-            keras.layers.Flatten()(self.observation_input),
-            self.action_input])
+            self.observation_input,
+            keras.layers.Reshape(
+                (self.window_length, self.nb_actions))(self.action_input)])
+        x = keras.layers.RNN(
+            [keras.layers.LSTMCell(256, dropout=0.3)] * 1,
+            stateful=True)(x)
         x = keras.layers.Dropout(0.3)(x)
-        x = keras.layers.Dense(128, activation='relu')(x)
+        x = keras.layers.Dense(256, activation='relu')(x)
         x = keras.layers.Dropout(0.3)(x)
-        x = keras.layers.Dense(128, activation='relu')(x)
+        x = keras.layers.Dense(256, activation='relu')(x)
+        x = keras.layers.Dropout(0.3)(x)
+        x = keras.layers.Dense(256, activation='relu')(x)
         x = keras.layers.Dropout(0.3)(x)
         x = keras.layers.Dense(5, activation='softmax')(x)
 
