@@ -4,6 +4,7 @@ import io
 import pickle
 import h5py
 import pandas
+import ctypes
 
 import keras.models
 import keras.layers
@@ -635,6 +636,38 @@ class Critics:
                 merged.append(keras.layers.concatenate(outputs,
                                           axis=0, name=name))
             return keras.models.Model(model.inputs, merged)
+
+
+class Helpers:
+    def __init__(self):
+        pass
+
+    def load_raw_states(self, path):
+        self.b = numpy.fromfile(path, dtype=numpy.uint8)
+        self.rs = (ddpg.toribash_env.toribash_state_t * \
+            (len(self.b) // ctypes.sizeof(ddpg.toribash_env.toribash_state_t)) \
+            ).from_buffer(self.b)
+        self.rsm = RawStatesMemory(self.rs, window_length=3)
+
+    def train(
+        self,
+        model,
+        batch_size=64,
+        dataset_split=0.4):
+
+        self.model = model
+
+        train_steps = int(self.rsm.nb_entries * dataset_split) // batch_size
+        test_steps = train_steps * 0.3
+        model.fit_generator(
+            iter(lambda : self.rsm.prioritized_sample_classification \
+                (batch_size=batch_size, dataset_split=dataset_split), []),
+            validation_data=iter(lambda : self.rsm.prioritized_sample_classification \
+                (batch_size=batch_size, is_test=True, dataset_split=dataset_split), []),
+            steps_per_epoch=train_steps,
+            validation_steps=test_steps,
+            epochs=60)
+
 
 
 class KerasSequence(keras.utils.Sequence):

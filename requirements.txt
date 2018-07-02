@@ -15,3 +15,4 @@ sklearn
 tables
 tensorflow
 tornado
+sysv_ipc
