@@ -1,15 +1,15 @@
 [submodule "deps/lua"]
 	path = deps/lua
-	url = git@github.com:nartes/lua.git
+	url = https://github.com/nartes/lua
 [submodule "deps/radare2book"]
 	path = deps/radare2book
-	url = git@github.com:nartes/radare2book.git
+	url = https://github.com/nartes/radare2book
 [submodule "deps/radare2"]
 	path = deps/radare2
-	url = git@github.com:nartes/radare2.git
+	url = https://github.com/nartes/radare2
 [submodule "deps/radare2-r2pipe"]
 	path = deps/radare2-r2pipe
-	url = git@github.com:nartes/radare2-r2pipe.git
+	url = https://github.com/nartes/radare2-r2pipe
 [submodule "deps/keras-rl"]
 	path = deps/keras-rl
 	url = https://github.com/keras-rl/keras-rl
