@@ -499,6 +499,26 @@ class RawStatesMemory:
 
         return b[0], keras.utils.to_categorical(b[1], 2)
 
+    def prioritized_sample_regression(self, batch=None, **kwargs):
+        if batch is None:
+            b = self.prioritized_sample(**kwargs)
+        else:
+            b = batch
+
+
+        if getattr(self, 'y_mean', None) is None:
+            self.y_mean = self.d['diff_injuries'].mean()
+        if getattr(self, 'y_dst', None) is None:
+            self.y_dst = numpy.maximum(
+            numpy.sqrt(
+                ((self.d['diff_injuries'] - self.y_mean) ** 2).sum()) \
+                / self.d['diff_injuries'].shape[0],
+            0)
+        y_regr = (b[1] - self.y_mean * self.d.shape[0] / b[1].shape[0]) \
+            / self.y_dst * b[1].shape[0] / self.d.shape[0]
+
+        return b[0], y_regr
+
 
 class Critics:
     def __init__(
@@ -552,8 +572,52 @@ class Critics:
             name='mutual_dist_feature_input')
 
         x = keras.layers.Flatten()(state_input)
-        x = keras.layers.Dense(64, activation='selu')(x)
-        x = keras.layers.Dropout(0.2)(x)
+        x = keras.layers.Dense(128, activation='relu')(x)
+        x = keras.layers.Dropout(0.3)(x)
+
+        x2 = keras.layers.BatchNormalization(axis=2)(mutual_dist_feature_input)
+        #x2 = keras.layers.Conv2D(
+        #    64,
+        #    (3, 3),
+        #    data_format='channels_first',
+        #    activation='selu')(mutual_dist_feature_input)
+        #x2 = keras.layers.MaxPooling2D(pool_size=(3, 1), data_format='channels_first')(x2)
+        #x2 = keras.layers.Conv2D(64, (16, 1), data_format='channels_first', activation='selu')(x2)
+        #x2 = keras.layers.MaxPooling2D(pool_size=(16, 1), data_format='channels_first')(x2)
+        #x2 = keras.layers.Conv2D(64, (16, 1), data_format='channels_first', activation='selu')(x2)
+        #x2 = keras.layers.MaxPooling2D(pool_size=(16, 1), data_format='channels_first')(x2)
+        x2 = keras.layers.Dropout(0.3)(x2)
+
+        #x2 = keras.layers.Conv2D(2, (4, 3), data_format='channels_first',
+        #        activation='selu')(mutual_dist_feature_input)
+        #x2 = keras.layers.MaxPooling2D(pool_size=(32, 1), data_format='channels_first')(x2)
+        x2 = keras.layers.Flatten()(x2)
+        x2 = keras.layers.Dense(128, activation='relu')(x2)
+        x2 = keras.layers.Dropout(0.3)(x2)
+
+        x3 = keras.layers.Concatenate()([x, x2])
+        y = keras.layers.Dense(128, activation='relu')(x3)
+        y = keras.layers.Dropout(0.5)(y)
+        y = keras.layers.Dense(2, activation='softmax')(y)
+
+        model = keras.models.Model(inputs=[state_input, mutual_dist_feature_input], outputs=y)
+
+        model.summary()
+
+        return model
+
+    def model3(self):
+        state_input = keras.layers.Input(
+            batch_shape=(self.batch_size, 2 * self.window_length) + self.state_shape,
+            name='state_input')
+
+        mutual_dist_feature_input = keras.layers.Input(
+            batch_shape=(self.batch_size, self.window_length,) + self.mutual_dist_feature_input,
+            name='mutual_dist_feature_input')
+
+        x = keras.layers.Flatten()(state_input)
+        x = keras.layers.Dense(128, activation='selu')(x)
+        x = keras.layers.Dropout(0.3)(x)
 
         #x2 = keras.layers.Conv2D(
         #    64,
@@ -571,13 +635,13 @@ class Critics:
         #        activation='selu')(mutual_dist_feature_input)
         #x2 = keras.layers.MaxPooling2D(pool_size=(32, 1), data_format='channels_first')(x2)
         x2 = keras.layers.Flatten()(mutual_dist_feature_input)
-        x2 = keras.layers.Dense(64, activation='selu')(x2)
-        x2 = keras.layers.Dropout(0.2)(x2)
+        x2 = keras.layers.Dense(128, activation='selu')(x2)
+        x2 = keras.layers.Dropout(0.3)(x2)
 
         x3 = keras.layers.Concatenate()([x, x2])
-        y = keras.layers.Dense(64, activation='selu')(x3)
-        y = keras.layers.Dropout(0.2)(y)
-        y = keras.layers.Dense(2, activation='softmax')(y)
+        y = keras.layers.Dense(128, activation='selu')(x3)
+        y = keras.layers.Dropout(0.5)(y)
+        y = keras.layers.Dense(1, activation='linear')(y)
 
         model = keras.models.Model(inputs=[state_input, mutual_dist_feature_input], outputs=y)
 
@@ -649,7 +713,7 @@ class Helpers:
             ).from_buffer(self.b)
         self.rsm = RawStatesMemory(self.rs, window_length=3)
 
-    def train(
+    def train_classification(
         self,
         model,
         batch_size=64,
@@ -663,6 +727,25 @@ class Helpers:
             iter(lambda : self.rsm.prioritized_sample_classification \
                 (batch_size=batch_size, dataset_split=dataset_split), []),
             validation_data=iter(lambda : self.rsm.prioritized_sample_classification \
+                (batch_size=batch_size, is_test=True, dataset_split=dataset_split), []),
+            steps_per_epoch=train_steps,
+            validation_steps=test_steps,
+            epochs=60)
+
+    def train_regression(
+        self,
+        model,
+        batch_size=64,
+        dataset_split=0.4):
+
+        self.model = model
+
+        train_steps = int(self.rsm.nb_entries * dataset_split) // batch_size
+        test_steps = train_steps * 0.3
+        model.fit_generator(
+            iter(lambda : self.rsm.prioritized_sample_regression \
+                (batch_size=batch_size, dataset_split=dataset_split), []),
+            validation_data=iter(lambda : self.rsm.prioritized_sample_regression \
                 (batch_size=batch_size, is_test=True, dataset_split=dataset_split), []),
             steps_per_epoch=train_steps,
             validation_steps=test_steps,
