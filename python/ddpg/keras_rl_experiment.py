@@ -572,7 +572,7 @@ class Critics:
             name='mutual_dist_feature_input')
 
         x = keras.layers.Flatten()(state_input)
-        x = keras.layers.Dense(128, activation='relu')(x)
+        x = keras.layers.Dense(256, activation='relu')(x)
         x = keras.layers.Dropout(0.3)(x)
 
         x2 = keras.layers.BatchNormalization(axis=2)(mutual_dist_feature_input)
@@ -592,11 +592,11 @@ class Critics:
         #        activation='selu')(mutual_dist_feature_input)
         #x2 = keras.layers.MaxPooling2D(pool_size=(32, 1), data_format='channels_first')(x2)
         x2 = keras.layers.Flatten()(x2)
-        x2 = keras.layers.Dense(128, activation='relu')(x2)
+        x2 = keras.layers.Dense(256, activation='relu')(x2)
         x2 = keras.layers.Dropout(0.3)(x2)
 
         x3 = keras.layers.Concatenate()([x, x2])
-        y = keras.layers.Dense(128, activation='relu')(x3)
+        y = keras.layers.Dense(256, activation='relu')(x3)
         y = keras.layers.Dropout(0.5)(y)
         y = keras.layers.Dense(2, activation='softmax')(y)
 
@@ -616,7 +616,7 @@ class Critics:
             name='mutual_dist_feature_input')
 
         x = keras.layers.Flatten()(state_input)
-        x = keras.layers.Dense(128, activation='selu')(x)
+        x = keras.layers.Dense(256, activation='selu')(x)
         x = keras.layers.Dropout(0.3)(x)
 
         #x2 = keras.layers.Conv2D(
@@ -635,11 +635,11 @@ class Critics:
         #        activation='selu')(mutual_dist_feature_input)
         #x2 = keras.layers.MaxPooling2D(pool_size=(32, 1), data_format='channels_first')(x2)
         x2 = keras.layers.Flatten()(mutual_dist_feature_input)
-        x2 = keras.layers.Dense(128, activation='selu')(x2)
+        x2 = keras.layers.Dense(256, activation='selu')(x2)
         x2 = keras.layers.Dropout(0.3)(x2)
 
         x3 = keras.layers.Concatenate()([x, x2])
-        y = keras.layers.Dense(128, activation='selu')(x3)
+        y = keras.layers.Dense(256, activation='selu')(x3)
         y = keras.layers.Dropout(0.5)(y)
         y = keras.layers.Dense(1, activation='linear')(y)
 
