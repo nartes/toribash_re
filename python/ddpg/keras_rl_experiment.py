@@ -5,6 +5,9 @@ import pickle
 import h5py
 import pandas
 import ctypes
+import matplotlib.pyplot
+import sklearn
+import sklearn.neural_network
 
 import keras.models
 import keras.layers
@@ -436,7 +439,7 @@ class RawStatesMemory:
             rand_keys_pos[k] = 0
             rand_ids[k] = groups[k]['id'].iloc[rand_keys[k]].values
 
-        X = ([], [])
+        X = ([], [], [], [], [], [])
         Y = []
 
         while len(indexes) < batch_size:
@@ -466,7 +469,7 @@ class RawStatesMemory:
 
                 X[0].append(numpy.random.normal(x, 1e-3))
 
-                d = numpy.empty((self.window_length, (2 * 20) ** 2, 3), dtype=numpy.float16)
+                d = numpy.empty((self.window_length, (2 * 20) ** 2, 3), dtype=numpy.float32)
                 w, p1, p2, j1, j2 = numpy.meshgrid(
                     range(self.window_length),
                     range(2),
@@ -483,6 +486,21 @@ class RawStatesMemory:
                 d[w, (j1 + 20 * p1) * 40 + (j2 + 20 * p2)] = x[w + p1, :, j1] - x[w + p2, :, j2]
 
                 X[1].append(numpy.random.normal(d, 1e-3))
+
+                mframes = numpy.stack([
+                    self.raw_states[k].world_state.match_frame \
+                    for k in range(i - self.window_length, i)])
+
+                dist = numpy.maximum(numpy.sqrt(numpy.sum(d ** 2, axis=2)), 1e-6)
+                d_dist = (dist[1:] - dist[:-1]) \
+                    / (mframes[1:] - mframes[:-1])[..., numpy.newaxis]
+                d2_dist = (d_dist[1:] - d_dist[:-1]) \
+                    / (mframes[2:] - mframes[:-2])[..., numpy.newaxis]
+
+                X[2].append(d_dist)
+                X[3].append(d2_dist)
+                X[4].append(mframes)
+                X[5].append(dist)
 
                 break
 
@@ -523,59 +541,42 @@ class RawStatesMemory:
 class Critics:
     def __init__(
         self,
-        state_shape=(3, 20),
-        mutual_dist_feature_input=((20 * 2) ** 2, 3),
         batch_size=32,
-        window_length=1):
+        window_length=3):
 
-        self.state_shape = state_shape
-        self.mutual_dist_feature_input = mutual_dist_feature_input
+        assert window_length >= 3
+
+        self.input_shapes = [ \
+            (2 * window_length, 3, 20),
+            (window_length, (20 * 2) ** 2, 3),
+            (window_length - 1, (20 * 2) ** 2,),
+            (window_length - 2, (20 * 2) ** 2,),
+            (window_length,),
+            (window_length, (20 * 2) ** 2,)]
+
         self.batch_size = batch_size
         self.window_length = window_length
 
-    def model1(
-        self,
-        qvalue_shape=[(1,), (1,3)]):
+    def model2(self, capacity=1, depth=1):
+        inputs = [keras.layers.Input(
+            batch_shape=(self.batch_size,) + input_shape) for input_shape in self.input_shapes]
 
-        state_input = keras.layers.Input(
-            batch_shape=(self.batch_size, self.window_length) + self.state_shape,
-            name='state_input')
+        net = []
 
-        x = keras.layers.Conv2D(
-            64,
-            (3, 3),
-            data_format='channels_first')(state_input)
-        #x = keras.layers.Reshape(
-        #    (window_length, numpy.prod(state_shape)))(state_input)
-        y0 = keras.layers.Dense(256, activation='tanh')(x)
-        y0 = keras.layers.Flatten()(y0)
-        y0 = keras.layers.Dense(qvalue_shape[0][0], activation='linear')(y0)
+        for i in inputs:
+            if len(i.shape) > 2:
+                x = keras.layers.Flatten()(i)
+            else:
+                x = i
 
-        assert qvalue_shape[1][0] == self.window_length
+            for d in range(depth):
+                x = keras.layers.Dense(32 << capacity, activation='relu')(x)
+                x = keras.layers.Dropout(0.3)(x)
 
-        y1 = keras.layers.Reshape((self.window_length, -1))(x)
-        y1 = keras.layers.TimeDistributed(keras.layers.Dense(qvalue_shape[1][1]))(y1)
+            net.append(x)
 
-        model = keras.models.Model(inputs=[state_input], outputs=[y0, y1])
+        x = keras.layers.Concatenate()(net)
 
-        model.summary()
-
-        return model
-
-    def model2(self):
-        state_input = keras.layers.Input(
-            batch_shape=(self.batch_size, 2 * self.window_length) + self.state_shape,
-            name='state_input')
-
-        mutual_dist_feature_input = keras.layers.Input(
-            batch_shape=(self.batch_size, self.window_length,) + self.mutual_dist_feature_input,
-            name='mutual_dist_feature_input')
-
-        x = keras.layers.Flatten()(state_input)
-        x = keras.layers.Dense(256, activation='relu')(x)
-        x = keras.layers.Dropout(0.3)(x)
-
-        x2 = keras.layers.BatchNormalization(axis=2)(mutual_dist_feature_input)
         #x2 = keras.layers.Conv2D(
         #    64,
         #    (3, 3),
@@ -586,21 +587,20 @@ class Critics:
         #x2 = keras.layers.MaxPooling2D(pool_size=(16, 1), data_format='channels_first')(x2)
         #x2 = keras.layers.Conv2D(64, (16, 1), data_format='channels_first', activation='selu')(x2)
         #x2 = keras.layers.MaxPooling2D(pool_size=(16, 1), data_format='channels_first')(x2)
-        x2 = keras.layers.Dropout(0.3)(x2)
 
         #x2 = keras.layers.Conv2D(2, (4, 3), data_format='channels_first',
         #        activation='selu')(mutual_dist_feature_input)
         #x2 = keras.layers.MaxPooling2D(pool_size=(32, 1), data_format='channels_first')(x2)
-        x2 = keras.layers.Flatten()(x2)
-        x2 = keras.layers.Dense(256, activation='relu')(x2)
-        x2 = keras.layers.Dropout(0.3)(x2)
 
-        x3 = keras.layers.Concatenate()([x, x2])
-        y = keras.layers.Dense(256, activation='relu')(x3)
-        y = keras.layers.Dropout(0.5)(y)
+        y = x
+
+        for d in range(depth):
+            y = keras.layers.Dense(32 << capacity, activation='relu')(y)
+            y = keras.layers.Dropout(0.2)(y)
+
         y = keras.layers.Dense(2, activation='softmax')(y)
 
-        model = keras.models.Model(inputs=[state_input, mutual_dist_feature_input], outputs=y)
+        model = keras.models.Model(inputs=inputs, outputs=y)
 
         model.summary()
 
@@ -724,11 +724,16 @@ class Helpers:
 
         train_steps = int(self.rsm.nb_entries * dataset_split) // batch_size
         test_steps = train_steps * 0.3
+
+        def filter_input(batch):
+            #return batch[0][:2], batch[1]
+            return batch
+
         model.fit_generator(
-            iter(lambda : self.rsm.prioritized_sample_classification \
-                (batch_size=batch_size, dataset_split=dataset_split), []),
-            validation_data=iter(lambda : self.rsm.prioritized_sample_classification \
-                (batch_size=batch_size, is_test=True, dataset_split=dataset_split), []),
+            iter(lambda : filter_input(self.rsm.prioritized_sample_classification \
+                (batch_size=batch_size, dataset_split=dataset_split)), []),
+            validation_data=iter(lambda : filter_input(self.rsm.prioritized_sample_classification \
+                (batch_size=batch_size, is_test=True, dataset_split=dataset_split)), []),
             steps_per_epoch=train_steps,
             validation_steps=test_steps,
             epochs=epochs)
@@ -752,6 +757,60 @@ class Helpers:
             steps_per_epoch=train_steps,
             validation_steps=test_steps,
             epochs=epochs)
+
+    def plot_samples(self, sample_size=100):
+        s = self.rsm.prioritized_sample_classification(batch_size=sample_size)
+
+        f, ax = matplotlib.pyplot.subplots(4, 1, sharex=True)
+
+        ax = [[o] for o in ax]
+
+        im0 = ax[0][0].pcolormesh(s[0][5][:, 0, :].T)
+        im1 = ax[1][0].pcolormesh(s[0][3][:, 0, :].T)
+        ax[2][0].plot(numpy.argmax(s[1], axis=1))
+
+        dc = numpy.clip(s[0][5][:, 0, :], 0, 2.0)
+        im3 = ax[3][0].pcolormesh(dc.T)
+
+        f.colorbar(im0, ax=ax[0][0])
+        f.colorbar(im1, ax=ax[1][0])
+        f.colorbar(im1, ax=ax[2][0])
+        f.colorbar(im3, ax=ax[3][0])
+
+        f.show()
+
+    def train_classification_sklearn(self, dataset_size=10000):
+        test_size = int(dataset_size * 0.3)
+        train_size = int(dataset_size * 0.7)
+        raw_train = self.rsm.prioritized_sample_classification(
+            batch_size=train_size, is_test=False)
+        raw_test = self.rsm.prioritized_sample_classification(
+            batch_size=test_size, is_test=True)
+
+        def to_sklearn(b, batch_size):
+            x = numpy.hstack([b[0][5][:, -1:, :], b[0][3]])
+            y = b[1]
+
+            return x.reshape(x.shape[0], -1)[:batch_size, ...], \
+                numpy.argmax(y, axis=1)[:batch_size, ...]
+
+        for ep in range(1):
+            max_iter = 2000
+            batch_size = 4000
+
+            train = to_sklearn(raw_train, batch_size=batch_size)
+            test = to_sklearn(raw_test, batch_size=batch_size)
+
+            for cf in [sklearn.svm.SVC(max_iter=max_iter), sklearn.neural_network.MLPClassifier()]:
+                cf.fit(train[0], train[1])
+
+                y_pred = cf.predict(test[0])
+
+                test_mae = numpy.sum(numpy.abs(y_pred - test[1]))
+                test_accuracy = numpy.sum(y_pred == test[1]) / test[1].shape[0]
+
+                print('ep = %d, bs = %d, max_iter = %d, mae = %lf, accuracy = %lf' % \
+                    (ep, batch_size, max_iter, test_mae, test_accuracy))
 
 
 
