@@ -7,6 +7,8 @@ import pandas
 import ctypes
 import matplotlib.pyplot
 import sklearn
+import sklearn.ensemble
+import sklearn.cluster
 import sklearn.neural_network
 
 import keras.models
@@ -485,7 +487,7 @@ class RawStatesMemory:
 
                 d[w, (j1 + 20 * p1) * 40 + (j2 + 20 * p2)] = x[w + p1, :, j1] - x[w + p2, :, j2]
 
-                X[1].append(numpy.random.normal(d, 1e-3))
+                X[1].append(numpy.random.normal(d, 1e-5))
 
                 mframes = numpy.stack([
                     self.raw_states[k].world_state.match_frame \
@@ -497,10 +499,10 @@ class RawStatesMemory:
                 d2_dist = (d_dist[1:] - d_dist[:-1]) \
                     / (mframes[2:] - mframes[:-2])[..., numpy.newaxis]
 
-                X[2].append(d_dist)
-                X[3].append(d2_dist)
-                X[4].append(mframes)
-                X[5].append(dist)
+                X[2].append(numpy.random.normal(d_dist, 1e-5))
+                X[3].append(numpy.random.normal(d2_dist, 1e-5))
+                X[4].append(numpy.random.normal(mframes, 0.1))
+                X[5].append(numpy.random.normal(dist, 1e-5))
 
                 break
 
@@ -557,25 +559,125 @@ class Critics:
         self.batch_size = batch_size
         self.window_length = window_length
 
-    def model2(self, capacity=1, depth=1):
+    def model2(self, capacity=1, depth=1, inputs_idxs=numpy.s_[:]):
         inputs = [keras.layers.Input(
             batch_shape=(self.batch_size,) + input_shape) for input_shape in self.input_shapes]
 
         net = []
 
-        for i in inputs:
-            if len(i.shape) > 2:
-                x = keras.layers.Flatten()(i)
-            else:
-                x = i
+        for index, input_layer in zip(inputs_idxs, numpy.array(inputs)[inputs_idxs]):
+            x = input_layer
+
+            if index in [0]:
+                x = keras.layers.Conv2D(
+                    data_format='channels_first',
+                    filters=32,
+                    kernel_size=(1, 1),
+                    padding='same',
+                    activation='relu',
+                    strides=(1, 1))(x)
+                x = keras.layers.Conv2D(
+                    data_format='channels_first',
+                    filters=32,
+                    kernel_size=(3, 4),
+                    padding='same',
+                    activation='relu',
+                    strides=(1, 1))(x)
+                x = keras.layers.Conv2D(
+                    data_format='channels_first',
+                    filters=32,
+                    kernel_size=(3, 4),
+                    padding='valid',
+                    activation='relu',
+                    strides=(3, 4))(x)
+                x = keras.layers.Conv2D(
+                    data_format='channels_first',
+                    filters=32,
+                    kernel_size=(1, 4),
+                    padding='valid',
+                    activation='relu',
+                    strides=(1, 4))(x)
+            elif index in [1]:
+                x = keras.layers.Conv2D(
+                    data_format='channels_first',
+                    filters=32,
+                    kernel_size=(1, 1),
+                    padding='same',
+                    activation='relu',
+                    strides=(1, 1))(x)
+                x = keras.layers.Conv2D(
+                    data_format='channels_first',
+                    filters=32,
+                    kernel_size=(4, 3),
+                    padding='same',
+                    activation='relu',
+                    strides=(1, 1))(x)
+                x = keras.layers.Conv2D(
+                    data_format='channels_first',
+                    filters=32,
+                    kernel_size=(4, 3),
+                    padding='valid',
+                    activation='relu',
+                    strides=(4, 3))(x)
+                x = keras.layers.Conv2D(
+                    data_format='channels_first',
+                    filters=32,
+                    kernel_size=(4, 1),
+                    padding='valid',
+                    activation='relu',
+                    strides=(4, 1))(x)
+                x = keras.layers.Conv2D(
+                    data_format='channels_first',
+                    filters=32,
+                    kernel_size=(4, 1),
+                    padding='valid',
+                    activation='relu',
+                    strides=(4, 1))(x)
+            elif index in [2, 4, 5]:
+                x = keras.layers.Conv1D(
+                    data_format='channels_first',
+                    filters=32,
+                    kernel_size=(1,),
+                    padding='same',
+                    activation='relu',
+                    strides=(1,))(x)
+                x = keras.layers.Conv1D(
+                    data_format='channels_first',
+                    filters=32,
+                    kernel_size=(4,),
+                    padding='valid',
+                    activation='relu',
+                    strides=(4,))(x)
+                x = keras.layers.Conv1D(
+                    data_format='channels_first',
+                    filters=32,
+                    kernel_size=(4,),
+                    padding='valid',
+                    activation='relu',
+                    strides=(4,))(x)
+                x = keras.layers.Conv1D(
+                    data_format='channels_first',
+                    filters=32,
+                    kernel_size=(4,),
+                    padding='valid',
+                    activation='relu',
+                    strides=(4,))(x)
+
+            if len(x.shape) > 2:
+                x = keras.layers.Flatten()(x)
+
+            #x = keras.layers.Conv1D(
 
             for d in range(depth):
                 x = keras.layers.Dense(32 << capacity, activation='relu')(x)
-                x = keras.layers.Dropout(0.3)(x)
+                #x = keras.layers.Dropout(0.1)(x)
 
             net.append(x)
 
-        x = keras.layers.Concatenate()(net)
+        if len(net) > 1:
+            x = keras.layers.Concatenate()(net)
+        else:
+            x = net[0]
 
         #x2 = keras.layers.Conv2D(
         #    64,
@@ -596,7 +698,7 @@ class Critics:
 
         for d in range(depth):
             y = keras.layers.Dense(32 << capacity, activation='relu')(y)
-            y = keras.layers.Dropout(0.2)(y)
+            #y = keras.layers.Dropout(0.2)(y)
 
         y = keras.layers.Dense(2, activation='softmax')(y)
 
@@ -779,38 +881,63 @@ class Helpers:
 
         f.show()
 
-    def train_classification_sklearn(self, dataset_size=10000):
+    def train_classification_sklearn(self, dataset_size=10000, batch_size=128):
         test_size = int(dataset_size * 0.3)
         train_size = int(dataset_size * 0.7)
-        raw_train = self.rsm.prioritized_sample_classification(
-            batch_size=train_size, is_test=False)
-        raw_test = self.rsm.prioritized_sample_classification(
-            batch_size=test_size, is_test=True)
 
-        def to_sklearn(b, batch_size):
+        def to_sklearn(b):
             x = numpy.hstack([b[0][5][:, -1:, :], b[0][3]])
             y = b[1]
 
-            return x.reshape(x.shape[0], -1)[:batch_size, ...], \
-                numpy.argmax(y, axis=1)[:batch_size, ...]
+            return x.reshape(x.shape[0], -1), \
+                numpy.argmax(y, axis=1)
 
         for ep in range(1):
             max_iter = 2000
-            batch_size = 4000
 
-            train = to_sklearn(raw_train, batch_size=batch_size)
-            test = to_sklearn(raw_test, batch_size=batch_size)
+            for cf in [ \
+                #sklearn.svm.SVC(max_iter=max_iter),
+                sklearn.neural_network.MLPClassifier(),
+                #sklearn.ensemble.RandomForestClassifier(
+                #    20,
+                #    max_depth=20,
+                #    random_state=0,
+                #    n_jobs=4,
+                #    max_features='log2',
+                #    warm_start=True)
+                #sklearn.ensemble.AdaBoostClassifier(
+                #    sklearn.neural_network.MLPClassifier(),
+                #    n_estimators=600,
+                #    learning_rate=1)
+                #sklearn.cluster.MiniBatchKMeans()
+                ]:
+                for bs in range(train_size // batch_size):
+                    print("\rtrain: batch = %d of %d" % (bs, train_size // batch_size), end='')
+                    if bs > 0:
+                        cf.partial_fit(*to_sklearn(self.rsm.prioritized_sample_classification(
+                            batch_size=batch_size, is_test=False)))
+                    else:
+                        cf.partial_fit(*to_sklearn(self.rsm.prioritized_sample_classification(
+                            batch_size=batch_size, is_test=False)), classes=[0, 1])
 
-            for cf in [sklearn.svm.SVC(max_iter=max_iter), sklearn.neural_network.MLPClassifier()]:
-                cf.fit(train[0], train[1])
+                y_test = []
+                y_pred = []
 
-                y_pred = cf.predict(test[0])
+                for bs in range(test_size // batch_size):
+                    print("\rvalidate: batch = %d of %d" % (bs, test_size // batch_size), end='')
+                    batch = to_sklearn(self.rsm.prioritized_sample_classification(
+                        batch_size=batch_size, is_test=False))
+                    y_test.append(batch[1])
+                    y_pred.append(cf.predict(batch[0]))
 
-                test_mae = numpy.sum(numpy.abs(y_pred - test[1]))
-                test_accuracy = numpy.sum(y_pred == test[1]) / test[1].shape[0]
+                y_test = numpy.concatenate(y_test)
+                y_pred = numpy.concatenate(y_pred)
 
-                print('ep = %d, bs = %d, max_iter = %d, mae = %lf, accuracy = %lf' % \
-                    (ep, batch_size, max_iter, test_mae, test_accuracy))
+                test_mae = numpy.sum(numpy.abs(y_pred - y_test))
+                test_accuracy = numpy.sum(y_pred == y_test) / y_test.shape[0]
+
+                print('cf = %s, ep = %d, bs = %d, max_iter = %d, mae = %lf, accuracy = %lf' % \
+                    (str(cf.__class__), ep, -1, max_iter, test_mae, test_accuracy))
 
 
 
