@@ -336,7 +336,10 @@ class RawStatesMemory:
     def __init__(self, rs, window_length=1):
         self.raw_states = rs
         self.window_length = window_length
-        self._train_window_length = 1
+        self.train_window_length = window_length
+        self._train_window_length = None
+        self._samples = None
+        self._iteration = None
         self.d = pandas.DataFrame({
             'injuries': numpy.array([rs.players[0].injury for rs in self.raw_states])})
         self.d['diff_injuries'] = self.d['injuries']
@@ -358,39 +361,59 @@ class RawStatesMemory:
         return x, [injury_diff[0], numpy.mean(x, axis=2)]
 
     def sample(self, batch_size, validation_split=0.3, is_test=False):
-        self._batch_size = batch_size
+        if self._samples is None or \
+            self._iteration == self._train_window_length or \
+            self._batch_size != batch_size or \
+            self.train_window_length != self._train_window_length:
 
-        split_index = int(self.nb_entries * (1.0 - validation_split))
+            self._batch_size = batch_size
+            self._train_window_length = self.train_window_length
 
-        if not is_test:
-            indexes = rl.memory.sample_batch_indexes(
-                self.window_length + self._train_window_length - 1 + \
-                split_index,
-                self.nb_entries - 1,
-                size=self._batch_size)
-        else:
-            indexes = rl.memory.sample_batch_indexes(
-                self.window_length + self._train_window_length - 1,
-                self.nb_entries - 1 - split_index,
-                size=self._batch_size)
+            split_index = int(self.nb_entries * (1.0 - validation_split))
 
-        X = []
-        Y = None
+            if not is_test:
+                indexes = rl.memory.sample_batch_indexes(
+                    self.window_length + self._train_window_length - 1 + \
+                    split_index,
+                    self.nb_entries - 1,
+                    size=self._batch_size)
+            else:
+                indexes = rl.memory.sample_batch_indexes(
+                    self.window_length + self._train_window_length - 1,
+                    self.nb_entries - 1 - split_index,
+                    size=self._batch_size)
 
-        for i in indexes:
-            x, y = self.raw_state_to_x_and_y(numpy.arange(i - self.window_length + 1, i + 1))
+            batch_idxs = []
 
-            X.append(x)
+            for i in indexes:
+                for k in range(-self._train_window_length + 1, 1):
+                        batch_idxs.append(i + k)
 
-            if Y is None:
-                Y = []
+            X = []
+            Y = None
+
+            for i in batch_idxs:
+                x, y = self.raw_state_to_x_and_y(numpy.arange(i - self.window_length + 1, i + 1))
+
+                X.append(x)
+
+                if Y is None:
+                    Y = []
+                    for k in range(len(y)):
+                        Y.append([])
+
                 for k in range(len(y)):
-                    Y.append([])
+                    Y[k].append(y[k])
 
-            for k in range(len(y)):
-                Y[k].append(y[k])
+                self._samples = numpy.stack(X), [numpy.stack(y) for y in Y]
+                self._iteration = 0
 
-        return numpy.stack(X), [numpy.stack(y) for y in Y]
+            ret = self._samples[0][self._iteration :: self._train_window_length], \
+                    [y[self._iteration :: self._train_window_length] for y in self._samples[1]]
+
+            self._iteration += 1
+
+            return ret
 
     def prioritized_sample(
         self,
@@ -398,8 +421,6 @@ class RawStatesMemory:
         validation_split=0.3,
         dataset_split=1.0,
         is_test=False):
-
-        indexes = []
 
         self._d2 = getattr(self, '_d2', {True: None, False: None})
 
@@ -436,35 +457,59 @@ class RawStatesMemory:
         rand_keys_pos = {}
         rand_ids = {}
 
-        for k in groups.keys():
-            rand_keys[k] = numpy.random.randint(0, groups[k].shape[0], batch_size * 10)
-            rand_keys_pos[k] = 0
-            rand_ids[k] = groups[k]['id'].iloc[rand_keys[k]].values
+        if self._samples is None or \
+            self._iteration == self._train_window_length or \
+            self._batch_size != batch_size or \
+            self.train_window_length != self._train_window_length:
 
-        X = ([], [], [], [], [], [])
-        Y = []
+            assert self.train_window_length >= self.window_length
 
-        while len(indexes) < batch_size:
-            group_type = self.group_type_uniform()[0]
+            indexes = []
 
-            while True:
-                assert rand_keys_pos[group_type] < rand_ids[group_type].shape[0]
+            self._batch_size = batch_size
+            self._train_window_length = self.train_window_length
 
-                i = rand_ids[group_type][rand_keys_pos[group_type]]
-                rand_keys_pos[group_type] += 1
+            for k in groups.keys():
+                rand_keys[k] = numpy.random.randint(
+                    0,
+                    groups[k].shape[0],
+                    batch_size * self._train_window_length * 10)
+                rand_keys_pos[k] = 0
+                rand_ids[k] = groups[k]['id'].iloc[rand_keys[k]].values
 
-                is_to_continue = False
+            while len(indexes) < self._batch_size:
+                group_type = self.group_type_uniform()[0]
 
-                for k in range(i - self.window_length, i):
-                    if k < 0 or self.d['match_frame'].values[k] == 0:
-                        is_to_continue = True
-                        break
+                while True:
+                    assert rand_keys_pos[group_type] < rand_ids[group_type].shape[0]
 
-                if is_to_continue:
-                    continue
+                    i = rand_ids[group_type][rand_keys_pos[group_type]]
+                    rand_keys_pos[group_type] += 1
 
-                indexes.append(i)
+                    is_to_continue = False
 
+                    for k in range(i - self.window_length - self._train_window_length + 1, i):
+                        if k < 0 or self.d['match_frame'].values[k] == 0:
+                            is_to_continue = True
+                            break
+
+                    if is_to_continue:
+                        continue
+
+                    indexes.append(i)
+
+                    break
+
+            batch_idxs = []
+
+            X = ([], [], [], [], [], [])
+            Y = []
+
+            for i in indexes:
+                for k in range(-self._train_window_length + 1, 1):
+                        batch_idxs.append(i + k)
+
+            for i in batch_idxs:
                 x = numpy.stack(sum([
                     [numpy.array(self.raw_states[k].players[p].joints_pos_3d) \
                         for p in range(2)] for k in range(i - self.window_length, i)], []))
@@ -504,11 +549,17 @@ class RawStatesMemory:
                 X[4].append(numpy.random.normal(mframes, 0.1))
                 X[5].append(numpy.random.normal(dist, 1e-5))
 
-                break
+            Y = self.d['diff_injuries'].values[batch_idxs]
 
-        Y = self.d['diff_injuries'].values[indexes]
+            self._samples = [numpy.stack(x) for x in X], Y
+            self._iteration = 0
 
-        return [numpy.stack(x) for x in X], Y
+        ret = [x[self._iteration :: self._train_window_length] for x in self._samples[0]], \
+            self._samples[1][self._iteration :: self._train_window_length]
+
+        self._iteration += 1
+
+        return ret
 
     def prioritized_sample_classification(self, **kwargs):
         b = self.prioritized_sample(**kwargs)
@@ -569,34 +620,44 @@ class Critics:
             x = input_layer
 
             if index in [0]:
-                x = keras.layers.Conv2D(
+                x = keras.layers.Reshape(
+                    target_shape=tuple([1,] + x.shape.as_list()[1:]))(x)
+                x = keras.layers.ConvLSTM2D(
                     data_format='channels_first',
                     filters=32,
                     kernel_size=(1, 1),
                     padding='same',
                     activation='relu',
-                    strides=(1, 1))(x)
-                x = keras.layers.Conv2D(
+                    strides=(1, 1),
+                    return_sequences=True)(x)
+                x = keras.layers.BatchNormalization()(x)
+                x = keras.layers.ConvLSTM2D(
                     data_format='channels_first',
                     filters=32,
                     kernel_size=(3, 4),
                     padding='same',
                     activation='relu',
-                    strides=(1, 1))(x)
-                x = keras.layers.Conv2D(
+                    strides=(1, 1),
+                    return_sequences=True)(x)
+                x = keras.layers.BatchNormalization()(x)
+                x = keras.layers.ConvLSTM2D(
                     data_format='channels_first',
                     filters=32,
                     kernel_size=(3, 4),
                     padding='valid',
                     activation='relu',
-                    strides=(3, 4))(x)
-                x = keras.layers.Conv2D(
+                    strides=(3, 4),
+                    return_sequences=True)(x)
+                x = keras.layers.BatchNormalization()(x)
+                x = keras.layers.ConvLSTM2D(
                     data_format='channels_first',
                     filters=32,
                     kernel_size=(1, 4),
                     padding='valid',
                     activation='relu',
-                    strides=(1, 4))(x)
+                    strides=(1, 4),
+                    return_sequences=True)(x)
+                x = keras.layers.BatchNormalization()(x)
             elif index in [1]:
                 x = keras.layers.Conv2D(
                     data_format='channels_first',
