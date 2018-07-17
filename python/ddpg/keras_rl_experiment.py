@@ -387,7 +387,7 @@ class RawStatesMemory:
 
             for i in indexes:
                 for k in range(-self._train_window_length + 1, 1):
-                        batch_idxs.append(i + k)
+                    batch_idxs.append(i + k)
 
             X = []
             Y = None
@@ -408,12 +408,12 @@ class RawStatesMemory:
                 self._samples = numpy.stack(X), [numpy.stack(y) for y in Y]
                 self._iteration = 0
 
-            ret = self._samples[0][self._iteration :: self._train_window_length], \
-                    [y[self._iteration :: self._train_window_length] for y in self._samples[1]]
+        ret = self._samples[0][self._iteration :: self._train_window_length], \
+                [y[self._iteration :: self._train_window_length] for y in self._samples[1]]
 
-            self._iteration += 1
+        self._iteration += 1
 
-            return ret
+        return ret
 
     def prioritized_sample(
         self,
@@ -488,8 +488,9 @@ class RawStatesMemory:
 
                     is_to_continue = False
 
-                    for k in range(i - self.window_length - self._train_window_length + 1, i):
-                        if k < 0 or self.d['match_frame'].values[k] == 0:
+                    sequence_bounds = (i - self.window_length - self._train_window_length + 1, i)
+                    for k in range(*sequence_bounds):
+                        if k < 0 or k > sequence_bounds[0] and self.d['match_frame'].values[k] == 0:
                             is_to_continue = True
                             break
 
@@ -502,7 +503,7 @@ class RawStatesMemory:
 
             batch_idxs = []
 
-            X = ([], [], [], [], [], [])
+            X = ([], [], [], [], [], [], [])
             Y = []
 
             for i in indexes:
@@ -514,7 +515,15 @@ class RawStatesMemory:
                     [numpy.array(self.raw_states[k].players[p].joints_pos_3d) \
                         for p in range(2)] for k in range(i - self.window_length, i)], []))
 
-                X[0].append(numpy.random.normal(x, 1e-3))
+                X[0].append(numpy.random.normal(x, 1e-5))
+
+                actions_list = sum([
+                    [numpy.concatenate([numpy.array(self.raw_states[k].players[p].joints),
+                     numpy.array(self.raw_states[k].players[p].grips)]) for p in range(2)] \
+                     for k in range(i - self.window_length, i + 1)], [])
+                actions = numpy.stack(actions_list)
+
+                X[6].append(actions)
 
                 d = numpy.empty((self.window_length, (2 * 20) ** 2, 3), dtype=numpy.float32)
                 w, p1, p2, j1, j2 = numpy.meshgrid(
@@ -595,9 +604,9 @@ class Critics:
     def __init__(
         self,
         batch_size=32,
-        window_length=3):
+        window_length=1):
 
-        assert window_length >= 3
+        assert window_length >= 1
 
         self.input_shapes = [ \
             (2 * window_length, 3, 20),
@@ -605,12 +614,18 @@ class Critics:
             (window_length - 1, (20 * 2) ** 2,),
             (window_length - 2, (20 * 2) ** 2,),
             (window_length,),
-            (window_length, (20 * 2) ** 2,)]
+            (window_length, (20 * 2) ** 2,),
+            (2 * (window_length + 1), 22)]
 
         self.batch_size = batch_size
         self.window_length = window_length
 
-    def model2(self, capacity=1, depth=1, inputs_idxs=numpy.s_[:]):
+    def model2(self, capacity=1, depth=(1, 1), inputs_idxs=numpy.s_[:]):
+        if type(depth) is not list:
+            depth = [depth, depth]
+
+        assert len(depth) == 2
+
         inputs = [keras.layers.Input(
             batch_shape=(self.batch_size,) + input_shape) for input_shape in self.input_shapes]
 
@@ -620,44 +635,73 @@ class Critics:
             x = input_layer
 
             if index in [0]:
-                x = keras.layers.Reshape(
-                    target_shape=tuple([1,] + x.shape.as_list()[1:]))(x)
-                x = keras.layers.ConvLSTM2D(
+                #x = keras.layers.Reshape(
+                #    target_shape=tuple([1,] + x.shape.as_list()[1:]))(x)
+                x = keras.layers.Conv2D(
                     data_format='channels_first',
-                    filters=32,
+                    filters=16,
                     kernel_size=(1, 1),
                     padding='same',
                     activation='relu',
+                    #dropout=0.75,
+                    #recurrent_dropout=0.8,
                     strides=(1, 1),
-                    return_sequences=True)(x)
-                x = keras.layers.BatchNormalization()(x)
-                x = keras.layers.ConvLSTM2D(
+                    #return_sequences=True
+                    )(x)
+                #x = keras.layers.BatchNormalization()(x)
+                x = keras.layers.Conv2D(
                     data_format='channels_first',
-                    filters=32,
+                    filters=16,
                     kernel_size=(3, 4),
                     padding='same',
                     activation='relu',
+                    #dropout=0.75,
+                    #recurrent_dropout=0.8,
                     strides=(1, 1),
-                    return_sequences=True)(x)
-                x = keras.layers.BatchNormalization()(x)
-                x = keras.layers.ConvLSTM2D(
-                    data_format='channels_first',
-                    filters=32,
-                    kernel_size=(3, 4),
-                    padding='valid',
-                    activation='relu',
-                    strides=(3, 4),
-                    return_sequences=True)(x)
-                x = keras.layers.BatchNormalization()(x)
-                x = keras.layers.ConvLSTM2D(
-                    data_format='channels_first',
-                    filters=32,
-                    kernel_size=(1, 4),
-                    padding='valid',
-                    activation='relu',
-                    strides=(1, 4),
-                    return_sequences=True)(x)
-                x = keras.layers.BatchNormalization()(x)
+                    #return_sequences=True
+                    )(x)
+                #x = keras.layers.BatchNormalization()(x)
+                if True:
+                    x = keras.layers.Conv2D(
+                        data_format='channels_first',
+                        filters=16,
+                        kernel_size=(3, 4),
+                        padding='valid',
+                        activation='relu',
+                        #dropout=0.75,
+                        #recurrent_dropout=0.8,
+                        strides=(3, 4),
+                        #return_sequences=True
+                        )(x)
+                #x = keras.layers.BatchNormalization()(x)
+                if True:
+                    x = keras.layers.Conv2D(
+                        data_format='channels_first',
+                        filters=16,
+                        kernel_size=(1, 4),
+                        padding='valid',
+                        activation='relu',
+                        #dropout=0.75,
+                        #recurrent_dropout=0.75,
+                        strides=(1, 4),
+                        #return_sequences=False
+                        )(x)
+                #x = keras.layers.BatchNormalization()(x)
+                x = keras.layers.Reshape(
+                    target_shape=tuple([1, numpy.prod(x.shape.as_list()[1:])]))(x)
+                if True:
+                    x = keras.layers.LSTM(
+                        32,
+                        #data_format='channels_first',
+                        #filters=1,
+                        #kernel_size=(1, 1),
+                        #padding='same',
+                        activation='relu',
+                        #dropout=0.75,
+                        #recurrent_dropout=0.75,
+                        #strides=(1, 4),
+                        return_sequences=False)(x)
+                #x = keras.layers.BatchNormalization()(x)
             elif index in [1]:
                 x = keras.layers.Conv2D(
                     data_format='channels_first',
@@ -723,13 +767,82 @@ class Critics:
                     padding='valid',
                     activation='relu',
                     strides=(4,))(x)
+            elif index in [6]:
+                x = keras.layers.Conv1D(
+                    data_format='channels_first',
+                    filters=16,
+                    kernel_size=(1,),
+                    padding='same',
+                    activation='relu',
+                    #dropout=0.75,
+                    #recurrent_dropout=0.8,
+                    strides=(1,),
+                    #return_sequences=True
+                    )(x)
+                x = keras.layers.Conv1D(
+                    data_format='channels_first',
+                    filters=16,
+                    kernel_size=(3,),
+                    padding='same',
+                    activation='relu',
+                    #dropout=0.75,
+                    #recurrent_dropout=0.8,
+                    strides=(1,),
+                    #return_sequences=True
+                    )(x)
+                x = keras.layers.Conv1D(
+                    data_format='channels_first',
+                    filters=16,
+                    kernel_size=(3,),
+                    padding='valid',
+                    activation='relu',
+                    #dropout=0.75,
+                    #recurrent_dropout=0.8,
+                    strides=(3,),
+                    #return_sequences=True
+                    )(x)
+                x = keras.layers.Conv1D(
+                    data_format='channels_first',
+                    filters=16,
+                    kernel_size=(3,),
+                    padding='valid',
+                    activation='relu',
+                    #dropout=0.75,
+                    #recurrent_dropout=0.8,
+                    strides=(3,),
+                    #return_sequences=True
+                    )(x)
+                x = keras.layers.Conv1D(
+                    data_format='channels_first',
+                    filters=16,
+                    kernel_size=(2,),
+                    padding='valid',
+                    activation='relu',
+                    #dropout=0.75,
+                    #recurrent_dropout=0.8,
+                    strides=(2,),
+                    #return_sequences=True
+                    )(x)
+                x = keras.layers.Reshape(
+                    target_shape=tuple([1, numpy.prod(x.shape.as_list()[1:])]))(x)
+                x = keras.layers.LSTM(
+                    16,
+                    #data_format='channels_first',
+                    #filters=1,
+                    #kernel_size=(1, 1),
+                    #padding='same',
+                    activation='relu',
+                    #dropout=0.75,
+                    #recurrent_dropout=0.75,
+                    #strides=(1, 4),
+                    return_sequences=False)(x)
 
             if len(x.shape) > 2:
                 x = keras.layers.Flatten()(x)
 
             #x = keras.layers.Conv1D(
 
-            for d in range(depth):
+            for d in range(depth[0]):
                 x = keras.layers.Dense(32 << capacity, activation='relu')(x)
                 #x = keras.layers.Dropout(0.1)(x)
 
@@ -757,7 +870,7 @@ class Critics:
 
         y = x
 
-        for d in range(depth):
+        for d in range(depth[1]):
             y = keras.layers.Dense(32 << capacity, activation='relu')(y)
             #y = keras.layers.Dropout(0.2)(y)
 
