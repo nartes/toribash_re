@@ -1,6 +1,7 @@
 import numpy
 import scipy
 import io
+import os
 import pickle
 import h5py
 import pandas
@@ -340,6 +341,9 @@ class RawStatesMemory:
         self._train_window_length = None
         self._samples = None
         self._iteration = None
+        self._is_test = None
+        self._input_idxs = None
+        self._window_size = None
         self.d = pandas.DataFrame({
             'injuries': numpy.array([rs.players[0].injury for rs in self.raw_states])})
         self.d['diff_injuries'] = self.d['injuries']
@@ -351,76 +355,13 @@ class RawStatesMemory:
     def nb_entries(self):
         return len(self.raw_states)
 
-    def raw_state_to_x_and_y(self, idxs):
-        injury_diff = numpy.diff(
-            numpy.array([self.raw_states[k].players[0].injury for k in \
-                [idxs[-1] - 1 if idxs[-1] > 0 else idxs[-1], idxs[-1]]]))
-
-        x = numpy.stack([numpy.array(self.raw_states[k].players[0].joints_pos_3d) for k in idxs])
-
-        return x, [injury_diff[0], numpy.mean(x, axis=2)]
-
-    def sample(self, batch_size, validation_split=0.3, is_test=False):
-        if self._samples is None or \
-            self._iteration == self._train_window_length or \
-            self._batch_size != batch_size or \
-            self.train_window_length != self._train_window_length:
-
-            self._batch_size = batch_size
-            self._train_window_length = self.train_window_length
-
-            split_index = int(self.nb_entries * (1.0 - validation_split))
-
-            if not is_test:
-                indexes = rl.memory.sample_batch_indexes(
-                    self.window_length + self._train_window_length - 1 + \
-                    split_index,
-                    self.nb_entries - 1,
-                    size=self._batch_size)
-            else:
-                indexes = rl.memory.sample_batch_indexes(
-                    self.window_length + self._train_window_length - 1,
-                    self.nb_entries - 1 - split_index,
-                    size=self._batch_size)
-
-            batch_idxs = []
-
-            for i in indexes:
-                for k in range(-self._train_window_length + 1, 1):
-                    batch_idxs.append(i + k)
-
-            X = []
-            Y = None
-
-            for i in batch_idxs:
-                x, y = self.raw_state_to_x_and_y(numpy.arange(i - self.window_length + 1, i + 1))
-
-                X.append(x)
-
-                if Y is None:
-                    Y = []
-                    for k in range(len(y)):
-                        Y.append([])
-
-                for k in range(len(y)):
-                    Y[k].append(y[k])
-
-                self._samples = numpy.stack(X), [numpy.stack(y) for y in Y]
-                self._iteration = 0
-
-        ret = self._samples[0][self._iteration :: self._train_window_length], \
-                [y[self._iteration :: self._train_window_length] for y in self._samples[1]]
-
-        self._iteration += 1
-
-        return ret
-
     def prioritized_sample(
         self,
         batch_size,
         validation_split=0.3,
         dataset_split=1.0,
-        is_test=False):
+        is_test=False,
+        input_idxs=range(6)):
 
         self._d2 = getattr(self, '_d2', {True: None, False: None})
 
@@ -438,76 +379,98 @@ class RawStatesMemory:
 
         d2 = self._d2[is_test]
 
-        d2['groups'] = d2.get('groups', {'no_reward': None, 'positive_reward': None})
-
-        groups = d2['groups']
-
-        if groups['no_reward'] is None:
-            groups['no_reward'] = d2['raw'][d2['raw']['diff_injuries'] > 0]
-
-        if groups['positive_reward'] is None:
-            groups['positive_reward'] = d2['raw'][d2['raw']['diff_injuries'] == 0]
-
-        self.group_type_uniform = getattr(
-            self,
-            'group_type_uniform',
-            add_uniform(['no_reward', 'positive_reward']))
-
-        rand_keys = {}
-        rand_keys_pos = {}
-        rand_ids = {}
-
         if self._samples is None or \
-            self._iteration == self._train_window_length or \
+            self._iteration == self._window_size or \
             self._batch_size != batch_size or \
-            self.train_window_length != self._train_window_length:
+            self._is_test != is_test or \
+            self._input_idxs != input_idxs or \
+            self.train_window_length + 1 != self._train_window_length:
 
             assert self.train_window_length >= self.window_length
 
-            indexes = []
+            if self.train_window_length + 1 != self._train_window_length:
+                d2['balanced_idxs'] = None
 
             self._batch_size = batch_size
-            self._train_window_length = self.train_window_length
+            self._train_window_length = self.train_window_length + 1
+            self._is_test = is_test
+            self._input_idxs = input_idxs
+            self._window_size = self._train_window_length - self.window_length
 
-            for k in groups.keys():
-                rand_keys[k] = numpy.random.randint(
-                    0,
-                    groups[k].shape[0],
-                    batch_size * self._train_window_length * 10)
-                rand_keys_pos[k] = 0
-                rand_ids[k] = groups[k]['id'].iloc[rand_keys[k]].values
+            if d2.get('balanced_idxs', None) is None:
+                raw = d2['raw']
 
-            while len(indexes) < self._batch_size:
-                group_type = self.group_type_uniform()[0]
+                z1 = raw['id'].values
+                z2 = (numpy.arange(
+                    (z1.size - self._train_window_length + 1) * \
+                    self._train_window_length) % self._train_window_length) + \
+                    numpy.arange(
+                        z1.size - self._train_window_length + 1) \
+                        .repeat(self._train_window_length)
+                z3 = z2.reshape(-1, self._train_window_length)
 
-                while True:
-                    assert rand_keys_pos[group_type] < rand_ids[group_type].shape[0]
+                mf_z3 = raw['match_frame'].values[z3]
+                di_z3 = raw['diff_injuries'].values[z3]
 
-                    i = rand_ids[group_type][rand_keys_pos[group_type]]
-                    rand_keys_pos[group_type] += 1
+                i1 = (numpy.sum(mf_z3[:, 1:] == 0, axis=1) == 0)
 
-                    is_to_continue = False
+                i2 = numpy.sum(di_z3[:, -self._window_size:] > 0, axis=1)
 
-                    sequence_bounds = (i - self.window_length - self._train_window_length + 1, i)
-                    for k in range(*sequence_bounds):
-                        if k < 0 or k > sequence_bounds[0] and self.d['match_frame'].values[k] == 0:
-                            is_to_continue = True
-                            break
+                i3 = z3[:, -1][i1]
 
-                    if is_to_continue:
-                        continue
+                s_i3 = pandas.DataFrame({'di_sum': i2[i1], 'id': i3}).sort_values(by=['di_sum'])
 
-                    indexes.append(i)
+                u_i3 = numpy.unique(s_i3['di_sum'], return_counts=True)
 
-                    break
+                ps_u_i3 = numpy.concatenate([[0], numpy.cumsum(u_i3[1])])
+
+                eta_k = u_i3[0].size - 1
+                eta_l = numpy.arange(eta_k + 1)
+
+                eta_pi = scipy.misc.factorial(eta_k) / \
+                    scipy.misc.factorial(eta_l) / \
+                    scipy.misc.factorial(eta_k - eta_l) / \
+                    (2.0 ** eta_k)
+
+                eta_g = scipy.stats.rv_discrete(values=(eta_l, eta_pi))
+
+                d2['balanced_idxs_data'] = {
+                    'z1': z1,
+                    'z2': z2,
+                    'z3': z3,
+                    'mf_z3': mf_z3,
+                    'di_z3': di_z3,
+                    'i1': i1,
+                    'i2': i2,
+                    'i3': i3,
+                    's_i3': s_i3,
+                    'u_i3': u_i3,
+                    'ps_u_i3': ps_u_i3,
+                    'eta_k': eta_k,
+                    'eta_l': eta_l,
+                    'eta_pi': eta_pi,
+                    'eta_g': eta_g
+                }
+
+                def generate_balanced_idxs():
+                    eta = eta_g.rvs(size=self._batch_size)
+                    xhi = numpy.random.randint(0, numpy.iinfo(numpy.int64).max, self._batch_size)
+
+                    hamma = ps_u_i3[eta] + xhi % u_i3[1][eta]
+
+                    return z1[s_i3['id'].values[hamma]]
+
+                d2['balanced_idxs'] = generate_balanced_idxs
+
+            indexes = d2['balanced_idxs']()
 
             batch_idxs = []
 
-            X = ([], [], [], [], [], [], [])
+            X = ([], [])
             Y = []
 
             for i in indexes:
-                for k in range(-self._train_window_length + 1, 1):
+                for k in range(-self._window_size + 1, 1):
                         batch_idxs.append(i + k)
 
             for i in batch_idxs:
@@ -520,51 +483,18 @@ class RawStatesMemory:
                 actions_list = sum([
                     [numpy.concatenate([numpy.array(self.raw_states[k].players[p].joints),
                      numpy.array(self.raw_states[k].players[p].grips)]) for p in range(2)] \
-                     for k in range(i - self.window_length, i + 1)], [])
+                     for k in range(i - self.window_length + 1, i + 1)], [])
                 actions = numpy.stack(actions_list)
 
-                X[6].append(actions)
-
-                d = numpy.empty((self.window_length, (2 * 20) ** 2, 3), dtype=numpy.float32)
-                w, p1, p2, j1, j2 = numpy.meshgrid(
-                    range(self.window_length),
-                    range(2),
-                    range(2),
-                    range(20),
-                    range(20))
-
-                w = w.flatten()
-                p1 = p1.flatten()
-                p2 = p2.flatten()
-                j1 = j1.flatten()
-                j2 = j2.flatten()
-
-                d[w, (j1 + 20 * p1) * 40 + (j2 + 20 * p2)] = x[w + p1, :, j1] - x[w + p2, :, j2]
-
-                X[1].append(numpy.random.normal(d, 1e-5))
-
-                mframes = numpy.stack([
-                    self.raw_states[k].world_state.match_frame \
-                    for k in range(i - self.window_length, i)])
-
-                dist = numpy.maximum(numpy.sqrt(numpy.sum(d ** 2, axis=2)), 1e-6)
-                d_dist = (dist[1:] - dist[:-1]) \
-                    / (mframes[1:] - mframes[:-1])[..., numpy.newaxis]
-                d2_dist = (d_dist[1:] - d_dist[:-1]) \
-                    / (mframes[2:] - mframes[:-2])[..., numpy.newaxis]
-
-                X[2].append(numpy.random.normal(d_dist, 1e-5))
-                X[3].append(numpy.random.normal(d2_dist, 1e-5))
-                X[4].append(numpy.random.normal(mframes, 0.1))
-                X[5].append(numpy.random.normal(dist, 1e-5))
+                X[1].append(numpy.random.normal(actions, 0.1))
 
             Y = self.d['diff_injuries'].values[batch_idxs]
 
             self._samples = [numpy.stack(x) for x in X], Y
             self._iteration = 0
 
-        ret = [x[self._iteration :: self._train_window_length] for x in self._samples[0]], \
-            self._samples[1][self._iteration :: self._train_window_length]
+        ret = [x[self._iteration :: self._window_size] for x in self._samples[0]], \
+            self._samples[1][self._iteration :: self._window_size]
 
         self._iteration += 1
 
@@ -579,23 +509,25 @@ class RawStatesMemory:
 
         return b[0], keras.utils.to_categorical(b[1], 2)
 
-    def prioritized_sample_regression(self, batch=None, **kwargs):
+    def prioritized_sample_regression(self, batch=None, normalize=False, **kwargs):
         if batch is None:
             b = self.prioritized_sample(**kwargs)
         else:
             b = batch
 
-
-        if getattr(self, 'y_mean', None) is None:
-            self.y_mean = self.d['diff_injuries'].mean()
-        if getattr(self, 'y_dst', None) is None:
-            self.y_dst = numpy.maximum(
-            numpy.sqrt(
-                ((self.d['diff_injuries'] - self.y_mean) ** 2).sum()) \
-                / self.d['diff_injuries'].shape[0],
-            0)
-        y_regr = (b[1] - self.y_mean * self.d.shape[0] / b[1].shape[0]) \
-            / self.y_dst * b[1].shape[0] / self.d.shape[0]
+        if normalize:
+            if getattr(self, 'y_mean', None) is None:
+                self.y_mean = self.d['diff_injuries'].mean()
+            if getattr(self, 'y_dst', None) is None:
+                self.y_dst = numpy.maximum(
+                numpy.sqrt(
+                    ((self.d['diff_injuries'] - self.y_mean) ** 2).sum()) \
+                    / self.d['diff_injuries'].shape[0],
+                0)
+            y_regr = (b[1] - self.y_mean * self.d.shape[0] / b[1].shape[0]) \
+                / self.y_dst * b[1].shape[0] / self.d.shape[0]
+        else:
+            y_regr = b[1]
 
         return b[0], y_regr
 
@@ -610,17 +542,14 @@ class Critics:
 
         self.input_shapes = [ \
             (2 * window_length, 3, 20),
-            (window_length, (20 * 2) ** 2, 3),
-            (window_length - 1, (20 * 2) ** 2,),
-            (window_length - 2, (20 * 2) ** 2,),
-            (window_length,),
-            (window_length, (20 * 2) ** 2,),
-            (2 * (window_length + 1), 22)]
+            (2 * window_length, 22)]
 
         self.batch_size = batch_size
         self.window_length = window_length
 
-    def model2(self, capacity=1, depth=(1, 1), inputs_idxs=numpy.s_[:]):
+    def model2(self, capacity=1, depth=(1, 1), inputs_idxs=numpy.s_[:], activations=('relu',),
+            filters=(16, 16), dropout=0.3, is_regression=False, is_batch_normalized=False,
+            use_lstm=False):
         if type(depth) is not list:
             depth = [depth, depth]
 
@@ -639,203 +568,186 @@ class Critics:
                 #    target_shape=tuple([1,] + x.shape.as_list()[1:]))(x)
                 x = keras.layers.Conv2D(
                     data_format='channels_first',
-                    filters=16,
+                    filters=filters[0],
                     kernel_size=(1, 1),
                     padding='same',
-                    activation='relu',
+                    activation=activations[0],
+                    kernel_initializer='glorot_normal',
+                    bias_initializer='glorot_normal',
                     #dropout=0.75,
                     #recurrent_dropout=0.8,
                     strides=(1, 1),
                     #return_sequences=True
                     )(x)
-                #x = keras.layers.BatchNormalization()(x)
+                x = keras.layers.Dropout(dropout)(x)
+                if is_batch_normalized:
+                    x = keras.layers.BatchNormalization()(x)
                 x = keras.layers.Conv2D(
                     data_format='channels_first',
-                    filters=16,
+                    filters=filters[0],
                     kernel_size=(3, 4),
                     padding='same',
-                    activation='relu',
+                    activation=activations[0],
+                    kernel_initializer='glorot_normal',
+                    bias_initializer='glorot_normal',
                     #dropout=0.75,
                     #recurrent_dropout=0.8,
                     strides=(1, 1),
                     #return_sequences=True
                     )(x)
-                #x = keras.layers.BatchNormalization()(x)
+                x = keras.layers.Dropout(dropout)(x)
+                if is_batch_normalized:
+                    x = keras.layers.BatchNormalization()(x)
                 if True:
                     x = keras.layers.Conv2D(
                         data_format='channels_first',
-                        filters=16,
+                        filters=filters[0],
                         kernel_size=(3, 4),
                         padding='valid',
-                        activation='relu',
+                        activation=activations[0],
+                        kernel_initializer='glorot_normal',
+                        bias_initializer='glorot_normal',
                         #dropout=0.75,
                         #recurrent_dropout=0.8,
                         strides=(3, 4),
                         #return_sequences=True
                         )(x)
-                #x = keras.layers.BatchNormalization()(x)
+                    x = keras.layers.Dropout(dropout)(x)
+                    if is_batch_normalized:
+                        x = keras.layers.BatchNormalization()(x)
                 if True:
                     x = keras.layers.Conv2D(
                         data_format='channels_first',
-                        filters=16,
+                        filters=filters[0],
                         kernel_size=(1, 4),
                         padding='valid',
-                        activation='relu',
+                        activation=activations[0],
+                        kernel_initializer='glorot_normal',
+                        bias_initializer='glorot_normal',
                         #dropout=0.75,
                         #recurrent_dropout=0.75,
                         strides=(1, 4),
                         #return_sequences=False
                         )(x)
-                #x = keras.layers.BatchNormalization()(x)
-                x = keras.layers.Reshape(
-                    target_shape=tuple([1, numpy.prod(x.shape.as_list()[1:])]))(x)
-                if True:
+                    x = keras.layers.Dropout(dropout)(x)
+                    if is_batch_normalized:
+                        x = keras.layers.BatchNormalization()(x)
+                if use_lstm:
+                    x = keras.layers.Reshape(
+                        target_shape=tuple([1, numpy.prod(x.shape.as_list()[1:])]))(x)
                     x = keras.layers.LSTM(
-                        32,
+                        filters[1],
+                        kernel_initializer='glorot_normal',
+                        recurrent_initializer='glorot_normal',
+                        bias_initializer='glorot_normal',
                         #data_format='channels_first',
                         #filters=1,
                         #kernel_size=(1, 1),
                         #padding='same',
-                        activation='relu',
-                        #dropout=0.75,
-                        #recurrent_dropout=0.75,
+                        activation=activations[0],
+                        dropout=0.3,
+                        recurrent_dropout=0.3,
                         #strides=(1, 4),
                         return_sequences=False)(x)
                 #x = keras.layers.BatchNormalization()(x)
             elif index in [1]:
-                x = keras.layers.Conv2D(
-                    data_format='channels_first',
-                    filters=32,
-                    kernel_size=(1, 1),
-                    padding='same',
-                    activation='relu',
-                    strides=(1, 1))(x)
-                x = keras.layers.Conv2D(
-                    data_format='channels_first',
-                    filters=32,
-                    kernel_size=(4, 3),
-                    padding='same',
-                    activation='relu',
-                    strides=(1, 1))(x)
-                x = keras.layers.Conv2D(
-                    data_format='channels_first',
-                    filters=32,
-                    kernel_size=(4, 3),
-                    padding='valid',
-                    activation='relu',
-                    strides=(4, 3))(x)
-                x = keras.layers.Conv2D(
-                    data_format='channels_first',
-                    filters=32,
-                    kernel_size=(4, 1),
-                    padding='valid',
-                    activation='relu',
-                    strides=(4, 1))(x)
-                x = keras.layers.Conv2D(
-                    data_format='channels_first',
-                    filters=32,
-                    kernel_size=(4, 1),
-                    padding='valid',
-                    activation='relu',
-                    strides=(4, 1))(x)
-            elif index in [2, 4, 5]:
                 x = keras.layers.Conv1D(
                     data_format='channels_first',
-                    filters=32,
+                    filters=filters[0],
                     kernel_size=(1,),
                     padding='same',
-                    activation='relu',
-                    strides=(1,))(x)
-                x = keras.layers.Conv1D(
-                    data_format='channels_first',
-                    filters=32,
-                    kernel_size=(4,),
-                    padding='valid',
-                    activation='relu',
-                    strides=(4,))(x)
-                x = keras.layers.Conv1D(
-                    data_format='channels_first',
-                    filters=32,
-                    kernel_size=(4,),
-                    padding='valid',
-                    activation='relu',
-                    strides=(4,))(x)
-                x = keras.layers.Conv1D(
-                    data_format='channels_first',
-                    filters=32,
-                    kernel_size=(4,),
-                    padding='valid',
-                    activation='relu',
-                    strides=(4,))(x)
-            elif index in [6]:
-                x = keras.layers.Conv1D(
-                    data_format='channels_first',
-                    filters=16,
-                    kernel_size=(1,),
-                    padding='same',
-                    activation='relu',
+                    activation=activations[0],
+                    kernel_initializer='glorot_normal',
+                    bias_initializer='glorot_normal',
                     #dropout=0.75,
                     #recurrent_dropout=0.8,
                     strides=(1,),
                     #return_sequences=True
                     )(x)
+                x = keras.layers.Dropout(dropout)(x)
+                if is_batch_normalized:
+                    x = keras.layers.BatchNormalization()(x)
                 x = keras.layers.Conv1D(
                     data_format='channels_first',
-                    filters=16,
+                    filters=filters[0],
                     kernel_size=(3,),
                     padding='same',
-                    activation='relu',
+                    activation=activations[0],
+                    kernel_initializer='glorot_normal',
+                    bias_initializer='glorot_normal',
                     #dropout=0.75,
                     #recurrent_dropout=0.8,
                     strides=(1,),
                     #return_sequences=True
                     )(x)
+                x = keras.layers.Dropout(dropout)(x)
+                if is_batch_normalized:
+                    x = keras.layers.BatchNormalization()(x)
                 x = keras.layers.Conv1D(
                     data_format='channels_first',
-                    filters=16,
+                    filters=filters[0],
                     kernel_size=(3,),
                     padding='valid',
-                    activation='relu',
+                    activation=activations[0],
+                    kernel_initializer='glorot_normal',
+                    bias_initializer='glorot_normal',
                     #dropout=0.75,
                     #recurrent_dropout=0.8,
                     strides=(3,),
                     #return_sequences=True
                     )(x)
+                x = keras.layers.Dropout(dropout)(x)
+                if is_batch_normalized:
+                    x = keras.layers.BatchNormalization()(x)
                 x = keras.layers.Conv1D(
                     data_format='channels_first',
-                    filters=16,
+                    filters=filters[0],
                     kernel_size=(3,),
                     padding='valid',
-                    activation='relu',
+                    activation=activations[0],
+                    kernel_initializer='glorot_normal',
+                    bias_initializer='glorot_normal',
                     #dropout=0.75,
                     #recurrent_dropout=0.8,
                     strides=(3,),
                     #return_sequences=True
                     )(x)
+                x = keras.layers.Dropout(dropout)(x)
+                if is_batch_normalized:
+                    x = keras.layers.BatchNormalization()(x)
                 x = keras.layers.Conv1D(
                     data_format='channels_first',
-                    filters=16,
+                    filters=filters[0],
                     kernel_size=(2,),
                     padding='valid',
-                    activation='relu',
+                    activation=activations[0],
+                    kernel_initializer='glorot_normal',
+                    bias_initializer='glorot_normal',
                     #dropout=0.75,
                     #recurrent_dropout=0.8,
                     strides=(2,),
                     #return_sequences=True
                     )(x)
-                x = keras.layers.Reshape(
-                    target_shape=tuple([1, numpy.prod(x.shape.as_list()[1:])]))(x)
-                x = keras.layers.LSTM(
-                    16,
-                    #data_format='channels_first',
-                    #filters=1,
-                    #kernel_size=(1, 1),
-                    #padding='same',
-                    activation='relu',
-                    #dropout=0.75,
-                    #recurrent_dropout=0.75,
-                    #strides=(1, 4),
-                    return_sequences=False)(x)
+                x = keras.layers.Dropout(dropout)(x)
+                if is_batch_normalized:
+                    x = keras.layers.BatchNormalization()(x)
+                if use_lstm:
+                    x = keras.layers.Reshape(
+                        target_shape=tuple([1, numpy.prod(x.shape.as_list()[1:])]))(x)
+                    x = keras.layers.LSTM(
+                        filters[1],
+                        kernel_initializer='glorot_normal',
+                        recurrent_initializer='glorot_normal',
+                        bias_initializer='glorot_normal',
+                        #data_format='channels_first',
+                        #filters=1,
+                        #kernel_size=(1, 1),
+                        #padding='same',
+                        activation=activations[0],
+                        dropout=0.3,
+                        recurrent_dropout=0.3,
+                        #strides=(1, 4),
+                        return_sequences=False)(x)
 
             if len(x.shape) > 2:
                 x = keras.layers.Flatten()(x)
@@ -843,7 +755,7 @@ class Critics:
             #x = keras.layers.Conv1D(
 
             for d in range(depth[0]):
-                x = keras.layers.Dense(32 << capacity, activation='relu')(x)
+                x = keras.layers.Dense(32 << capacity, activation=activations[0])(x)
                 #x = keras.layers.Dropout(0.1)(x)
 
             net.append(x)
@@ -871,10 +783,13 @@ class Critics:
         y = x
 
         for d in range(depth[1]):
-            y = keras.layers.Dense(32 << capacity, activation='relu')(y)
+            y = keras.layers.Dense(32 << capacity, activation=activations[0])(y)
             #y = keras.layers.Dropout(0.2)(y)
 
-        y = keras.layers.Dense(2, activation='softmax')(y)
+        if is_regression:
+            y = keras.layers.Dense(1, activation='elu')(y)
+        else:
+            y = keras.layers.Dense(2, activation='softmax')(y)
 
         model = keras.models.Model(inputs=inputs, outputs=y)
 
@@ -982,11 +897,25 @@ class Helpers:
     def __init__(self):
         pass
 
-    def load_raw_states(self, path):
-        self.b = numpy.fromfile(path, dtype=numpy.uint8)
+    def load_raw_states(self, paths):
+        if type(paths) is not list:
+            paths = [paths]
+
+        sizes = [os.stat(path).st_size for path in paths]
+        total_size = numpy.sum(sizes)
+
+        self.b = numpy.empty((total_size,), dtype=numpy.uint8)
+
+        pos = 0
+        for path, size in zip(paths, sizes):
+            buf = numpy.fromfile(path, dtype=numpy.uint8)
+            self.b[pos:][:size] = buf
+            pos += size
+
         self.rs = (ddpg.toribash_env.toribash_state_t * \
             (len(self.b) // ctypes.sizeof(ddpg.toribash_env.toribash_state_t)) \
             ).from_buffer(self.b)
+
         self.rsm = RawStatesMemory(self.rs, window_length=3)
 
     def train_classification(
@@ -994,6 +923,7 @@ class Helpers:
         model,
         batch_size=64,
         dataset_split=0.4,
+        train_steps_multiplier=1.0,
         epochs=10):
 
         self.model = model
@@ -1010,9 +940,10 @@ class Helpers:
                 (batch_size=batch_size, dataset_split=dataset_split)), []),
             validation_data=iter(lambda : filter_input(self.rsm.prioritized_sample_classification \
                 (batch_size=batch_size, is_test=True, dataset_split=dataset_split)), []),
-            steps_per_epoch=train_steps,
+            steps_per_epoch=train_steps * train_steps_multiplier,
             validation_steps=test_steps,
-            epochs=epochs)
+            epochs=epochs,
+            verbose=2)
 
     def train_regression(
         self,
