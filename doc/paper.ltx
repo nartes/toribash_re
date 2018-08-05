@@ -9,6 +9,7 @@
 \usepackage{graphicx}
 \usepackage{subfigure}
 \usepackage{multicol}
+\usepackage{multirow}
 \usepackage{algorithmic}
 \usepackage{moreverb}
 \usepackage{listings}
@@ -95,6 +96,40 @@ using $s_{i-k}, \dots, s_{i-1}; a_{i-k}, \dots, a_{i-1}$.
 So effectively a sliding window of length $k$ is moved toward states
 with bigger indexes.
 it simulates a part of game episode.
+
+Let's train model with $m=3,6$ and $k=3$.
+And later on validate the result across different values of $m=\overline{3,6}$, $k=3$.
+
+\begin{center}
+{\tiny
+\begin{tabular}{|c|c|c|c|c|c|}
+  \hline
+  m & 0s recall & 1s recall & 0s recall & 1s recall & \multirow{2}{*}{dataset portion} \\
+  (validation) & ($m=3$ train) & ($m=3$ train) & ($m=6$ train) & ($m=6$ train) & \\ \hline
+  3 & 87\% & 90\% & 82\% & 93\% & 93\% \\ \hline
+  4 & 74\% & 90\% & 82\% & 84\% & 91\% \\ \hline
+  5 & 64\% & 90\% & 82\% & 78\% & 89\% \\ \hline
+  6 & 57\% & 90\% & 82\% & 73\% & 87\% \\
+  \hline
+\end{tabular}
+}
+\end{center}
+
+\begin{center}
+{\tiny
+\begin{tabular}{|c|c|c|c|c|c|}
+  \hline
+  m & \multicolumn{5}{|c|}{
+    distribution of sampling acc. to sum of 1s (probs from uniform)} \\ \cline{2-6}
+  (validation) & 0 & 1 & 2 & 3 & 4 \\ \hline
+  3 & 87\% (50\%) & 13\% (50\%) & & & \\ \hline
+  4 & 70\% (25\%) & 16\% (50\%) & 5\% (25\%) & & \\ \hline
+  5 & 73\% (12.5\%) & 19\% (37.5\%) & 6\% (37.5\%) & 2\% (12.5\%) & \\ \hline
+  6 & 68\% (6.25\%) & 21\% (25\%) & 7\% (37.5\%) & 3\% (25\%) & 1\% (6.25\%) \\
+  \hline
+\end{tabular}
+}
+\end{center}
 
 \cleardoublepage
 
