@@ -2,6 +2,7 @@ import numpy
 import scipy
 import io
 import os
+import tempfile
 import pickle
 import h5py
 import pandas
@@ -1044,6 +1045,42 @@ class Helpers:
                 print('cf = %s, ep = %d, bs = %d, max_iter = %d, mae = %lf, accuracy = %lf' % \
                     (str(cf.__class__), ep, -1, max_iter, test_mae, test_accuracy))
 
+    def mine_dataset(self, client_key, steps_limit, save_prefix):
+
+        iteration = 0
+        while True:
+            raw_states = []
+
+            te = ddpg.toribash_env.ToribashEnvironment(toribash_msg_queue_key=client_key)
+            while len(raw_states) < steps_limit:
+                print("\rraw_states len is %d" % len(raw_states), end='')
+                st = te.reset()
+                while True:
+                    raw_states.append(te._cur_state)
+                    act = ddpg.experiment.Experiment._generate_bounded_uniform(te.action_bound)
+                    o, r, d, i = te.step(act)
+                    if d:
+                        break
+            te.close()
+
+            b = (raw_states[0].__class__ * len(raw_states))()
+            for k, v in zip(range(len(raw_states)), raw_states):
+                if k % (len(raw_states) // 100) == 0:
+                    print("\r%%=%f" % (k / len(raw_states) * 100))
+                b[k] = v
+
+            b2 = numpy.frombuffer(b, dtype=numpy.uint8)
+
+            outf = tempfile.mktemp(
+                dir='tmp',
+                prefix='mine-dataset-%s-' % save_prefix,
+                suffix='.dat')
+
+            b2.tofile(outf)
+
+            print(iteration)
+
+            iteration += 1
 
 
 class KerasSequence(keras.utils.Sequence):
