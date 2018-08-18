@@ -1,17 +1,22 @@
 import numpy
 import scipy
 import io
+import copy
 import os
 import tempfile
+import pprint
 import pickle
 import h5py
 import pandas
+import functools
+import multiprocessing
 import ctypes
 import matplotlib.pyplot
 import sklearn
 import sklearn.ensemble
 import sklearn.cluster
 import sklearn.neural_network
+import collections
 
 import keras.models
 import keras.layers
@@ -334,136 +339,364 @@ class LocalMemory(rl.memory.SequentialMemory):
                 numpy.stack([o.reward for o in sample]), 5)
 
 
-class RawStatesMemory:
-    def __init__(self, rs, window_length=1):
-        self.raw_states = rs
-        self.window_length = window_length
-        self.train_window_length = window_length
-        self._train_window_length = None
-        self._samples = None
-        self._iteration = None
-        self._is_test = None
-        self._input_idxs = None
-        self._window_size = None
-        self.d = pandas.DataFrame({
-            'injuries': numpy.array([rs.players[0].injury for rs in self.raw_states])})
-        self.d['diff_injuries'] = self.d['injuries']
-        self.d['diff_injuries'].iloc[1:] = self.d['injuries'].diff()
-        self.d['match_frame'] = numpy.array([rs.world_state.match_frame for rs in self.raw_states])
-        self.d['id'] = self.d.index
+class Datasets:
+    def __init__(self, raw_states_paths):
+        self.raw_states_paths = raw_states_paths
 
-    @property
-    def nb_entries(self):
-        return len(self.raw_states)
+    @classmethod
+    def get_entries_count(cls, raw_states_path):
+        return os.stat(raw_states_path).st_size \
+            // ctypes.sizeof(ddpg.toribash_env.toribash_state_t)
 
-    def prioritized_sample(
-        self,
+    @classmethod
+    def get_dataset(cls, raw_states_path, start_entry=None, end_entry=None):
+        if start_entry is None:
+            start_entry = 0
+
+        entries_count = cls.get_entries_count(raw_states_path)
+
+        if end_entry is None:
+            end_entry = entries_count
+
+        assert start_entry >= 0 and start_entry < end_entry and end_entry <= entries_count
+
+        raw_states_buf = None
+
+        with io.open(raw_states_path, 'rb') as f:
+            f.seek(start_entry * ctypes.sizeof(ddpg.toribash_env.toribash_state_t))
+            raw_states_buf = numpy.fromfile(
+                raw_states_path,
+                dtype=numpy.uint8,
+                count=(end_entry - start_entry) * \
+                    ctypes.sizeof(ddpg.toribash_env.toribash_state_t))
+
+        raw_states = (ddpg.toribash_env.toribash_state_t * \
+            (len(raw_states_buf) // ctypes.sizeof(ddpg.toribash_env.toribash_state_t)) \
+            ).from_buffer(raw_states_buf)
+
+
+        return raw_states
+
+    @classmethod
+    def get_some_features(cls, raw_states):
+        d = pandas.DataFrame({
+            'injuries': numpy.array([rs.players[0].injury for rs in raw_states])})
+        d['diff_injuries'] = d['injuries']
+        d['diff_injuries'].iloc[1:] = d['injuries'].diff()
+        d['match_frame'] = numpy.array([rs.world_state.match_frame for rs in raw_states])
+        d['id'] = d.index
+
+        return d
+
+    @classmethod
+    def get_distribution_features(
+        cls,
+        features,
         batch_size,
-        validation_split=0.3,
-        dataset_split=1.0,
-        is_test=False,
-        input_idxs=range(6)):
+        is_test,
+        validation_split,
+        dataset_split,
+        window_length,
+        train_window_length):
 
-        self._d2 = getattr(self, '_d2', {True: None, False: None})
+        total_sequence_length = train_window_length + 1
+        window_size = total_sequence_length - window_length
 
-        if self._d2[is_test] is None:
-            if not is_test:
-                td = self.d.iloc[:int(self.d.shape[0] * dataset_split)]
-                self._d2[is_test] = \
-                    {'raw': \
-                        td.iloc[:-int(td.shape[0] * validation_split)]}
-            else:
-                td = self.d.iloc[:int(self.d.shape[0] * dataset_split)]
-                self._d2[is_test] = \
-                    {'raw': \
-                        td.iloc[-int(td.shape[0] * validation_split):]}
+        raw = None
 
-        d2 = self._d2[is_test]
+        if not is_test:
+            td = features.iloc[:int(features.shape[0] * dataset_split)]
+            raw = td.iloc[:-int(td.shape[0] * validation_split)]
+        else:
+            td = features.iloc[:int(features.shape[0] * dataset_split)]
+            raw = td.iloc[-int(td.shape[0] * validation_split):]
 
-        if self._samples is None or \
-            self._iteration == self._window_size or \
-            self._batch_size != batch_size or \
-            self._is_test != is_test or \
-            self._input_idxs != input_idxs or \
-            self.train_window_length + 1 != self._train_window_length:
+        z1 = raw['id'].values
+        z2 = (numpy.arange(
+            (z1.size - total_sequence_length + 1) * \
+            total_sequence_length) % total_sequence_length) + \
+            numpy.arange(
+                z1.size - total_sequence_length + 1) \
+                .repeat(total_sequence_length)
+        z3 = z2.reshape(-1, total_sequence_length)
 
-            assert self.train_window_length >= self.window_length
+        mf_z3 = raw['match_frame'].values[z3]
+        di_z3 = raw['diff_injuries'].values[z3]
 
-            if self.train_window_length + 1 != self._train_window_length:
-                d2['balanced_idxs'] = None
+        i1 = (numpy.sum(mf_z3[:, 1:] == 0, axis=1) == 0)
 
-            self._batch_size = batch_size
-            self._train_window_length = self.train_window_length + 1
-            self._is_test = is_test
-            self._input_idxs = input_idxs
-            self._window_size = self._train_window_length - self.window_length
+        i2 = numpy.sum(di_z3[:, -window_size:] > 0, axis=1)
 
-            if d2.get('balanced_idxs', None) is None:
-                raw = d2['raw']
+        i3 = z3[:, -1][i1]
 
-                z1 = raw['id'].values
-                z2 = (numpy.arange(
-                    (z1.size - self._train_window_length + 1) * \
-                    self._train_window_length) % self._train_window_length) + \
-                    numpy.arange(
-                        z1.size - self._train_window_length + 1) \
-                        .repeat(self._train_window_length)
-                z3 = z2.reshape(-1, self._train_window_length)
+        s_i3 = pandas.DataFrame({'di_sum': i2[i1], 'id': i3}).sort_values(by=['di_sum'])
 
-                mf_z3 = raw['match_frame'].values[z3]
-                di_z3 = raw['diff_injuries'].values[z3]
+        u_i3 = numpy.unique(s_i3['di_sum'], return_counts=True)
 
-                i1 = (numpy.sum(mf_z3[:, 1:] == 0, axis=1) == 0)
+        ps_u_i3 = numpy.concatenate([[0], numpy.cumsum(u_i3[1])])
 
-                i2 = numpy.sum(di_z3[:, -self._window_size:] > 0, axis=1)
+        eta_k = u_i3[0].size - 1
+        eta_l = numpy.arange(eta_k + 1)
 
-                i3 = z3[:, -1][i1]
+        eta_pi = scipy.misc.factorial(eta_k) / \
+            scipy.misc.factorial(eta_l) / \
+            scipy.misc.factorial(eta_k - eta_l) / \
+            (2.0 ** eta_k)
 
-                s_i3 = pandas.DataFrame({'di_sum': i2[i1], 'id': i3}).sort_values(by=['di_sum'])
+        eta_g = scipy.stats.rv_discrete(values=(eta_l, eta_pi))
 
-                u_i3 = numpy.unique(s_i3['di_sum'], return_counts=True)
+        return {
+            'distribution_features': {
+                'z1': z1,
+                'z2': z2,
+                'z3': z3,
+                'mf_z3': mf_z3,
+                'di_z3': di_z3,
+                'i1': i1,
+                'i2': i2,
+                'i3': i3,
+                's_i3': s_i3,
+                'u_i3': u_i3,
+                'ps_u_i3': ps_u_i3,
+                'eta_k': eta_k,
+                'eta_l': eta_l,
+                'eta_pi': eta_pi,
+                'eta_g': eta_g
+            },
+            'attrs': {
+                'batch_size': batch_size,
+                'window_length': window_length,
+                'train_window_length': train_window_length,
+                'window_size': window_size,
+                'total_sequence_length': total_sequence_length
+            }
+        }
 
-                ps_u_i3 = numpy.concatenate([[0], numpy.cumsum(u_i3[1])])
+    @classmethod
+    def get_balanced_raw_states_with_features(cls, raw_states, features, distribution_features):
+        df = distribution_features['distribution_features']
+        attrs = distribution_features['attrs']
 
-                eta_k = u_i3[0].size - 1
-                eta_l = numpy.arange(eta_k + 1)
+        min_size = numpy.min(df['u_i3'][1])
+        total_size = min_size * df['u_i3'][1].size * attrs['total_sequence_length']
 
-                eta_pi = scipy.misc.factorial(eta_k) / \
-                    scipy.misc.factorial(eta_l) / \
-                    scipy.misc.factorial(eta_k - eta_l) / \
-                    (2.0 ** eta_k)
+        b_raw_states = (raw_states._type_ * total_size)()
 
-                eta_g = scipy.stats.rv_discrete(values=(eta_l, eta_pi))
+        eta = numpy.arange(df['u_i3'][1].size).repeat(min_size)
 
-                d2['balanced_idxs_data'] = {
-                    'z1': z1,
-                    'z2': z2,
-                    'z3': z3,
-                    'mf_z3': mf_z3,
-                    'di_z3': di_z3,
-                    'i1': i1,
-                    'i2': i2,
-                    'i3': i3,
-                    's_i3': s_i3,
-                    'u_i3': u_i3,
-                    'ps_u_i3': ps_u_i3,
-                    'eta_k': eta_k,
-                    'eta_l': eta_l,
-                    'eta_pi': eta_pi,
-                    'eta_g': eta_g
-                }
+        hamma = numpy.concatenate([
+            numpy.random.permutation(numpy.arange(df['u_i3'][1][k]) + \
+                df['ps_u_i3'][k])[:min_size] \
+            for k in range(df['u_i3'][1].size)])
 
-                def generate_balanced_idxs():
-                    eta = eta_g.rvs(size=self._batch_size)
-                    xhi = numpy.random.randint(0, numpy.iinfo(numpy.int64).max, self._batch_size)
+        permute_eta_hamma_ids = numpy.random.permutation(numpy.arange(eta.size))
 
-                    hamma = ps_u_i3[eta] + xhi % u_i3[1][eta]
+        eta_perm = eta[permute_eta_hamma_ids]
+        hamma_perm = hamma[permute_eta_hamma_ids]
 
-                    return z1[s_i3['id'].values[hamma]]
+        fetch_ids = df['z1'][df['s_i3']['id'].values[hamma_perm]]
 
-                d2['balanced_idxs'] = generate_balanced_idxs
+        fetch_ids_range = fetch_ids.repeat(attrs['total_sequence_length']) + \
+            numpy.arange(
+                attrs['total_sequence_length'] * fetch_ids.size) \
+                % attrs['total_sequence_length'] - attrs['total_sequence_length'] + 1
 
-            indexes = d2['balanced_idxs']()
+        for k in range(len(b_raw_states)):
+            b_raw_states[k] = raw_states[fetch_ids_range[k]]
+
+        attrs['sequences_count'] = fetch_ids.size
+
+        return {
+            'features': features.iloc[fetch_ids_range],
+            'raw_states': b_raw_states,
+            'distribution_features': {
+                'eta_perm': eta_perm,
+                'hamma_perm': hamma_perm,
+                'fetch_ids': fetch_ids
+            },
+            'attrs': attrs
+        }
+
+    @classmethod
+    def generate_balanced_idxs(cls, distribution_features):
+        df = distribution_features['distribution_features']
+        attrs = distribution_features['attrs']
+
+        while True:
+            eta = df['eta_g'].rvs(
+                size=attrs['batch_size'])
+
+            xhi = numpy.random.randint(
+                0,
+                numpy.iinfo(numpy.int64).max,
+                attrs['batch_size'])
+
+            hamma = df['ps_u_i3'][eta] + xhi % df['u_i3'][1][eta]
+
+            yield df['z1'][df['s_i3']['id'].values[hamma]]
+
+    @classmethod
+    def _process_raw_states_mp_kernel(
+        cls,
+        rsp,
+        entries_split,
+        batch_size,
+        is_test,
+        validation_split,
+        dataset_split,
+        window_length,
+        train_window_length):
+
+        rs = cls.get_dataset(
+            rsp,
+            end_entry=int(cls.get_entries_count(rsp) * entries_split))
+        fs = cls.get_some_features(rs)
+
+        df = cls.get_distribution_features(
+            fs,
+            batch_size=batch_size,
+            is_test=is_test,
+            validation_split=validation_split,
+            dataset_split=dataset_split,
+            window_length=window_length,
+            train_window_length=train_window_length)
+        brswf = cls.get_balanced_raw_states_with_features(rs, fs, df)
+
+        original_brs = brswf['raw_states']
+        brswf['_raw_states'] = {
+            'buffer': numpy.frombuffer(original_brs, dtype=numpy.uint8).copy(),
+            'type': original_brs._type_,
+            'len': len(original_brs)
+        }
+        brswf['raw_states'] = None
+
+        return brswf
+
+    def process_raw_states(
+        self,
+        entries_split,
+        batch_size,
+        is_test,
+        validation_split,
+        dataset_split,
+        window_length,
+        train_window_length
+        ):
+
+        assert len(self.raw_states_paths) > 0
+
+        out_hdf5_file = tempfile.mktemp(
+            dir='tmp',
+            prefix='processed-raw-states-',
+            suffix='.h5py')
+
+        pprint.pprint({'out_hdf5_file': out_hdf5_file})
+
+        pool = multiprocessing.Pool(processes=2)
+
+        total_brswf = pool.map_async(
+            functools.partial(
+                Datasets._process_raw_states_mp_kernel,
+                entries_split=entries_split,
+                batch_size=batch_size,
+                is_test=is_test,
+                validation_split=validation_split,
+                dataset_split=dataset_split,
+                window_length=window_length,
+                train_window_length=train_window_length),
+            self.raw_states_paths).get()
+
+        for it in total_brswf:
+            serialized_brs = it['_raw_states']
+            it['raw_states'] = \
+                (serialized_brs['type'] * serialized_brs['len']) \
+                    .from_buffer(serialized_brs['buffer'])
+
+        with h5py.File(out_hdf5_file, 'a') as f:
+            g = f.create_group('attrs')
+            for k, v in total_brswf[0]['attrs'].items():
+                g.attrs[k] = v
+
+        pandas.concat([
+            o['features'][['match_frame', 'diff_injuries', 'injuries']] \
+            for o in total_brswf],
+            ignore_index=True).to_hdf(out_hdf5_file, key='features')
+
+        with h5py.File(out_hdf5_file, 'a') as f:
+            rs_type = total_brswf[0]['raw_states']._type_
+
+            chunk_shape = (1024, total_brswf[0]['attrs']['total_sequence_length'], ctypes.sizeof(rs_type))
+            f_raw_states = f.create_dataset(
+                'raw_states',
+                shape=chunk_shape,
+                chunks=chunk_shape,
+                maxshape=(None,) + chunk_shape[1:],
+                dtype=numpy.uint8)
+
+            f_raw_states.resize((0, 0, 0))
+
+            for o in total_brswf:
+                brs = o['raw_states']
+
+                assert len(brs) % chunk_shape[1] == 0
+
+                pos = f_raw_states.shape[0]
+                add_shape = (len(brs) // chunk_shape[1],) + chunk_shape[1:]
+
+                f_raw_states.resize((pos + add_shape[0],) + add_shape[1:])
+
+                f_raw_states.write_direct(
+                    numpy.frombuffer(brs, dtype=numpy.uint8).reshape(add_shape),
+                    dest_sel=numpy.s_[pos:])
+
+        return out_hdf5_file
+
+    @classmethod
+    def load_brswf(cls, hdf_path):
+        brswf = {}
+        with h5py.File(hdf_path, 'r') as f:
+            brswf['attrs'] = dict(f['attrs'].attrs)
+
+        brswf['features'] = pandas.read_hdf(hdf_path, key='features')
+        brswf['features']['id'] = brswf['features'].index
+
+        with h5py.File(hdf_path, 'r') as f:
+            rs = (ddpg.toribash_env.toribash_state_t * numpy.prod(f['raw_states'].shape[:2]))()
+            buffer_rs = numpy.frombuffer(rs, dtype=numpy.uint8).reshape(f['raw_states'].shape)
+            f['raw_states'].read_direct(buffer_rs)
+            brswf['raw_states'] = rs
+
+        return brswf
+
+    @classmethod
+    def generate_idxs_from_balanced_raw_states(cls, balanced_raw_states):
+        attrs = balanced_raw_states['attrs']
+
+        while True:
+            yield numpy.random.choice(attrs['sequences_count'], attrs['batch_size']) * \
+                attrs['total_sequence_length'] + attrs['total_sequence_length'] - 1
+
+    @classmethod
+    def sample_brswf(cls, brswf):
+        return cls.generate_normalized_dataset(
+            brswf['raw_states'],
+            brswf['features'],
+            brswf,
+            cls.generate_idxs_from_balanced_raw_states(
+                brswf))
+
+    @classmethod
+    def generate_normalized_dataset(
+        cls,
+        raw_states,
+        features,
+        distribution_features,
+        balanced_idxs):
+
+        attrs = distribution_features['attrs']
+
+        while True:
+            indexes = next(balanced_idxs)
 
             batch_idxs = []
 
@@ -471,66 +704,69 @@ class RawStatesMemory:
             Y = []
 
             for i in indexes:
-                for k in range(-self._window_size + 1, 1):
+                for k in range(-attrs['window_size'] + 1, 1):
                         batch_idxs.append(i + k)
 
             for i in batch_idxs:
                 x = numpy.stack(sum([
-                    [numpy.array(self.raw_states[k].players[p].joints_pos_3d) \
-                        for p in range(2)] for k in range(i - self.window_length, i)], []))
+                    [numpy.array(raw_states[k].players[p].joints_pos_3d) \
+                        for p in range(2)] for k in range(i - attrs['window_length'], i)], []))
 
                 X[0].append(numpy.random.normal(x, 1e-5))
 
                 actions_list = sum([
-                    [numpy.concatenate([numpy.array(self.raw_states[k].players[p].joints),
-                     numpy.array(self.raw_states[k].players[p].grips)]) for p in range(2)] \
-                     for k in range(i - self.window_length + 1, i + 1)], [])
+                    [numpy.concatenate([numpy.array(raw_states[k].players[p].joints),
+                     numpy.array(raw_states[k].players[p].grips)]) for p in range(2)] \
+                     for k in range(i - attrs['window_length'] + 1, i + 1)], [])
                 actions = numpy.stack(actions_list)
 
                 X[1].append(numpy.random.normal(actions, 0.1))
 
-            Y = self.d['diff_injuries'].values[batch_idxs]
+            Y = features['diff_injuries'].values[batch_idxs]
 
-            self._samples = [numpy.stack(x) for x in X], Y
-            self._iteration = 0
+            samples = [numpy.stack(x) for x in X], Y
 
-        ret = [x[self._iteration :: self._window_size] for x in self._samples[0]], \
-            self._samples[1][self._iteration :: self._window_size]
+            for iteration in range(attrs['window_size']):
+                ret = [x[iteration :: attrs['window_size']] for x in samples[0]], \
+                    samples[1][iteration :: attrs['window_size']]
+                yield ret
 
-        self._iteration += 1
 
-        return ret
+class RawStatesMemory:
+    def __init__(self, train_hdf_path, test_hdf_path):
+        self.train_brswf = Datasets.load_brswf(train_hdf_path)
+        self.test_brswf = Datasets.load_brswf(test_hdf_path)
+        self.train_sample_generator = functools.partial(
+            Datasets.sample_brswf, self.train_brswf)
+        self.test_sample_generator = functools.partial(
+            Datasets.sample_brswf, self.test_brswf)
+
+    def attrs(self):
+        return copy.deepcopy(self.train_brswf['attrs'])
+
+    def nb_entries(self, is_test=False):
+        if not is_test:
+            return self.train_brswf['attrs']['sequences_count']
+        else:
+            return self.test_brswf['attrs']['sequences_count']
+
+    def prioritized_sample(self, is_test=True):
+        while True:
+            if not is_test:
+                yield from self.train_sample_generator()
+            else:
+                yield from self.test_sample_generator()
 
     def prioritized_sample_classification(self, **kwargs):
-        b = self.prioritized_sample(**kwargs)
+        g = self.prioritized_sample(**kwargs)
+        while True:
+            b = next(g)
 
-        i = b[1] > 0
-        b[1][i] = 1
-        b[1][~i] = 0
+            i = b[1] > 0
+            b[1][i] = 1
+            b[1][~i] = 0
 
-        return b[0], keras.utils.to_categorical(b[1], 2)
-
-    def prioritized_sample_regression(self, batch=None, normalize=False, **kwargs):
-        if batch is None:
-            b = self.prioritized_sample(**kwargs)
-        else:
-            b = batch
-
-        if normalize:
-            if getattr(self, 'y_mean', None) is None:
-                self.y_mean = self.d['diff_injuries'].mean()
-            if getattr(self, 'y_dst', None) is None:
-                self.y_dst = numpy.maximum(
-                numpy.sqrt(
-                    ((self.d['diff_injuries'] - self.y_mean) ** 2).sum()) \
-                    / self.d['diff_injuries'].shape[0],
-                0)
-            y_regr = (b[1] - self.y_mean * self.d.shape[0] / b[1].shape[0]) \
-                / self.y_dst * b[1].shape[0] / self.d.shape[0]
-        else:
-            y_regr = b[1]
-
-        return b[0], y_regr
+            yield b[0], keras.utils.to_categorical(b[1], 2)
 
 
 class Critics:
@@ -895,56 +1131,18 @@ class Critics:
 
 
 class Helpers:
-    def __init__(self):
-        pass
+    def __init__(self, rsm):
+        self.rsm = rsm
 
-    def load_raw_states(self, paths):
-        if type(paths) is not list:
-            paths = [paths]
-
-        sizes = [os.stat(path).st_size for path in paths]
-        total_size = numpy.sum(sizes)
-
-        self.b = numpy.empty((total_size,), dtype=numpy.uint8)
-
-        pos = 0
-        for path, size in zip(paths, sizes):
-            buf = numpy.fromfile(path, dtype=numpy.uint8)
-            self.b[pos:][:size] = buf
-            pos += size
-
-        self.rs = (ddpg.toribash_env.toribash_state_t * \
-            (len(self.b) // ctypes.sizeof(ddpg.toribash_env.toribash_state_t)) \
-            ).from_buffer(self.b)
-
-        self.rsm = RawStatesMemory(self.rs, window_length=3)
-
-    def train_classification(
-        self,
-        model,
-        batch_size=64,
-        dataset_split=0.4,
-        train_steps_multiplier=1.0,
-        epochs=10):
-
-        self.model = model
-
-        train_steps = int(self.rsm.nb_entries * dataset_split) // batch_size
-        test_steps = train_steps * 0.3
-
-        def filter_input(batch):
-            #return batch[0][:2], batch[1]
-            return batch
+    def train_classification(self, model, train_steps_multiplier=1.0, epochs=10):
 
         model.fit_generator(
-            iter(lambda : filter_input(self.rsm.prioritized_sample_classification \
-                (batch_size=batch_size, dataset_split=dataset_split)), []),
-            validation_data=iter(lambda : filter_input(self.rsm.prioritized_sample_classification \
-                (batch_size=batch_size, is_test=True, dataset_split=dataset_split)), []),
-            steps_per_epoch=train_steps * train_steps_multiplier,
-            validation_steps=test_steps,
+            self.rsm.prioritized_sample_classification(),
+            validation_data=self.rsm.prioritized_sample_classification(is_test=True),
+            steps_per_epoch=self.rsm.nb_entries() * train_steps_multiplier,
+            validation_steps=self.rsm.nb_entries(is_test=True),
             epochs=epochs,
-            verbose=2)
+            verbose=1)
 
     def train_regression(
         self,
@@ -1046,7 +1244,6 @@ class Helpers:
                     (str(cf.__class__), ep, -1, max_iter, test_mae, test_accuracy))
 
     def mine_dataset(self, client_key, steps_limit, save_prefix):
-
         iteration = 0
         while True:
             raw_states = []
