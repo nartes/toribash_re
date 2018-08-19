@@ -477,17 +477,21 @@ class Datasets:
         df = distribution_features['distribution_features']
         attrs = distribution_features['attrs']
 
-        min_size = numpy.min(df['u_i3'][1])
-        total_size = min_size * df['u_i3'][1].size * attrs['total_sequence_length']
+        min_group_id = numpy.argmin(df['u_i3'][1])
+        min_size = df['u_i3'][1][min_group_id]
+        min_coef = df['eta_pi'] / df['eta_pi'][min_group_id]
+        group_norm_coef = numpy.max(min_coef)
+        group_sizes = numpy.int64(min_coef / group_norm_coef * min_size)
+        total_size = numpy.sum(group_sizes) * attrs['total_sequence_length']
 
         b_raw_states = (raw_states._type_ * total_size)()
 
-        eta = numpy.arange(df['u_i3'][1].size).repeat(min_size)
+        eta = numpy.arange(df['u_i3'][1].size).repeat(group_sizes)
 
         hamma = numpy.concatenate([
             numpy.random.permutation(numpy.arange(df['u_i3'][1][k]) + \
-                df['ps_u_i3'][k])[:min_size] \
-            for k in range(df['u_i3'][1].size)])
+                df['ps_u_i3'][k])[:group_sizes[k]] \
+            for k in range(len(group_sizes))])
 
         permute_eta_hamma_ids = numpy.random.permutation(numpy.arange(eta.size))
 
