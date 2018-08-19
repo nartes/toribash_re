@@ -548,14 +548,14 @@ class Datasets:
         validation_split,
         dataset_split,
         window_length,
-        train_window_length):
+        train_window_length,
+        hdf_lock,
+        hdf_paths):
 
         rs = cls.get_dataset(
             rsp,
             end_entry=int(cls.get_entries_count(rsp) * entries_split))
         fs = cls.get_some_features(rs)
-
-        res = {}
 
         for is_test in [False, True]:
             df = cls.get_distribution_features(
@@ -568,17 +568,57 @@ class Datasets:
                 train_window_length=train_window_length)
             brswf = cls.get_balanced_raw_states_with_features(rs, fs, df)
 
-            original_brs = brswf['raw_states']
-            brswf['_raw_states'] = {
-                'buffer': numpy.frombuffer(original_brs, dtype=numpy.uint8).copy(),
-                'type': original_brs._type_,
-                'len': len(original_brs)
-            }
-            brswf['raw_states'] = None
+            attrs = copy.deepcopy(brswf['attrs'])
 
-            res[is_test] = brswf
+            old_attrs = None
 
-        return res
+            with hdf_lock:
+                with h5py.File(hdf_paths[is_test], 'a') as f:
+                    old_attrs = dict(f.attrs)
+
+                attrs['sequences_count'] += old_attrs.get('sequences_count', 0)
+
+                with h5py.File(hdf_paths[is_test], 'a') as f:
+                    if f.get('attrs', None) is None:
+                        g = f.create_group('attrs')
+                    else:
+                        g = f['attrs']
+
+                    for k, v in attrs.items():
+                        g.attrs[k] = v
+
+                brswf['features'][['match_frame', 'diff_injuries', 'injuries']]. \
+                    to_hdf(hdf_paths[is_test], key='features', append=True)
+
+                with h5py.File(hdf_paths[is_test], 'a') as f:
+                    rs_type = brswf['raw_states']._type_
+
+                    chunk_shape = (1024, attrs['total_sequence_length'], ctypes.sizeof(rs_type))
+                    if f.get('raw_states', None) is None:
+                        f_raw_states = f.create_dataset(
+                            'raw_states',
+                            shape=chunk_shape,
+                            chunks=chunk_shape,
+                            maxshape=(None,) + chunk_shape[1:],
+                            dtype=numpy.uint8)
+
+                        f_raw_states.resize((0, 0, 0))
+                    else:
+                        f_raw_states = f['raw_states']
+
+
+                    brs = brswf['raw_states']
+
+                    assert len(brs) % chunk_shape[1] == 0
+
+                    pos = f_raw_states.shape[0]
+                    add_shape = (len(brs) // chunk_shape[1],) + chunk_shape[1:]
+
+                    f_raw_states.resize((pos + add_shape[0],) + add_shape[1:])
+
+                    f_raw_states.write_direct(
+                        numpy.frombuffer(brs, dtype=numpy.uint8).reshape(add_shape),
+                        dest_sel=numpy.s_[pos:])
 
     def process_raw_states(
         self,
@@ -595,22 +635,13 @@ class Datasets:
 
         pool = multiprocessing.Pool(processes=pool_processes)
 
-        mixed_total_brswf = pool.map_async(
-            functools.partial(
-                Datasets._process_raw_states_mp_kernel,
-                entries_split=entries_split,
-                batch_size=batch_size,
-                validation_split=validation_split,
-                dataset_split=dataset_split,
-                window_length=window_length,
-                train_window_length=train_window_length),
-            self.raw_states_paths).get()
+        manager = multiprocessing.Manager()
+
+        hdf_lock = manager.Lock()
 
         hdf_paths = {}
 
         for is_test in [False, True]:
-            total_brswf = [o[is_test] for o in mixed_total_brswf]
-
             out_hdf5_file = tempfile.mktemp(
                 dir='tmp',
                 prefix='processed-raw-states-',
@@ -620,53 +651,18 @@ class Datasets:
 
             pprint.pprint({'out_hdf5_file': out_hdf5_file, 'is_test': is_test})
 
-            for it in total_brswf:
-                serialized_brs = it['_raw_states']
-                it['raw_states'] = \
-                    (serialized_brs['type'] * serialized_brs['len']) \
-                        .from_buffer(serialized_brs['buffer'])
-
-            attrs = total_brswf[0]['attrs']
-
-            attrs['sequences_count'] = \
-                numpy.sum([o['attrs']['sequences_count'] for o in total_brswf])
-
-            with h5py.File(out_hdf5_file, 'a') as f:
-                g = f.create_group('attrs')
-                for k, v in attrs.items():
-                    g.attrs[k] = v
-
-            pandas.concat([
-                o['features'][['match_frame', 'diff_injuries', 'injuries']] \
-                for o in total_brswf],
-                ignore_index=True).to_hdf(out_hdf5_file, key='features')
-
-            with h5py.File(out_hdf5_file, 'a') as f:
-                rs_type = total_brswf[0]['raw_states']._type_
-
-                chunk_shape = (1024, attrs['total_sequence_length'], ctypes.sizeof(rs_type))
-                f_raw_states = f.create_dataset(
-                    'raw_states',
-                    shape=chunk_shape,
-                    chunks=chunk_shape,
-                    maxshape=(None,) + chunk_shape[1:],
-                    dtype=numpy.uint8)
-
-                f_raw_states.resize((0, 0, 0))
-
-                for o in total_brswf:
-                    brs = o['raw_states']
-
-                    assert len(brs) % chunk_shape[1] == 0
-
-                    pos = f_raw_states.shape[0]
-                    add_shape = (len(brs) // chunk_shape[1],) + chunk_shape[1:]
-
-                    f_raw_states.resize((pos + add_shape[0],) + add_shape[1:])
-
-                    f_raw_states.write_direct(
-                        numpy.frombuffer(brs, dtype=numpy.uint8).reshape(add_shape),
-                        dest_sel=numpy.s_[pos:])
+        pool.map_async(
+            functools.partial(
+                Datasets._process_raw_states_mp_kernel,
+                entries_split=entries_split,
+                batch_size=batch_size,
+                validation_split=validation_split,
+                dataset_split=dataset_split,
+                window_length=window_length,
+                train_window_length=train_window_length,
+                hdf_lock=hdf_lock,
+                hdf_paths=hdf_paths),
+            self.raw_states_paths).get()
 
         return hdf_paths
 
