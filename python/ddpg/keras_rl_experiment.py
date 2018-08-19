@@ -545,7 +545,6 @@ class Datasets:
         rsp,
         entries_split,
         batch_size,
-        is_test,
         validation_split,
         dataset_split,
         window_length,
@@ -556,31 +555,35 @@ class Datasets:
             end_entry=int(cls.get_entries_count(rsp) * entries_split))
         fs = cls.get_some_features(rs)
 
-        df = cls.get_distribution_features(
-            fs,
-            batch_size=batch_size,
-            is_test=is_test,
-            validation_split=validation_split,
-            dataset_split=dataset_split,
-            window_length=window_length,
-            train_window_length=train_window_length)
-        brswf = cls.get_balanced_raw_states_with_features(rs, fs, df)
+        res = {}
 
-        original_brs = brswf['raw_states']
-        brswf['_raw_states'] = {
-            'buffer': numpy.frombuffer(original_brs, dtype=numpy.uint8).copy(),
-            'type': original_brs._type_,
-            'len': len(original_brs)
-        }
-        brswf['raw_states'] = None
+        for is_test in [False, True]:
+            df = cls.get_distribution_features(
+                fs,
+                batch_size=batch_size,
+                is_test=is_test,
+                validation_split=validation_split,
+                dataset_split=dataset_split,
+                window_length=window_length,
+                train_window_length=train_window_length)
+            brswf = cls.get_balanced_raw_states_with_features(rs, fs, df)
 
-        return brswf
+            original_brs = brswf['raw_states']
+            brswf['_raw_states'] = {
+                'buffer': numpy.frombuffer(original_brs, dtype=numpy.uint8).copy(),
+                'type': original_brs._type_,
+                'len': len(original_brs)
+            }
+            brswf['raw_states'] = None
+
+            res[is_test] = brswf
+
+        return res
 
     def process_raw_states(
         self,
         entries_split,
         batch_size,
-        is_test,
         validation_split,
         dataset_split,
         window_length,
@@ -590,75 +593,82 @@ class Datasets:
 
         assert len(self.raw_states_paths) > 0
 
-        out_hdf5_file = tempfile.mktemp(
-            dir='tmp',
-            prefix='processed-raw-states-',
-            suffix='.h5py')
-
-        pprint.pprint({'out_hdf5_file': out_hdf5_file})
-
         pool = multiprocessing.Pool(processes=pool_processes)
 
-        total_brswf = pool.map_async(
+        mixed_total_brswf = pool.map_async(
             functools.partial(
                 Datasets._process_raw_states_mp_kernel,
                 entries_split=entries_split,
                 batch_size=batch_size,
-                is_test=is_test,
                 validation_split=validation_split,
                 dataset_split=dataset_split,
                 window_length=window_length,
                 train_window_length=train_window_length),
             self.raw_states_paths).get()
 
-        for it in total_brswf:
-            serialized_brs = it['_raw_states']
-            it['raw_states'] = \
-                (serialized_brs['type'] * serialized_brs['len']) \
-                    .from_buffer(serialized_brs['buffer'])
+        hdf_paths = {}
 
-        attrs = total_brswf[0]['attrs']
+        for is_test in [False, True]:
+            total_brswf = [o[is_test] for o in mixed_total_brswf]
 
-        attrs['sequences_count'] = sum([o['sequences_split'] for o in attrs])
+            out_hdf5_file = tempfile.mktemp(
+                dir='tmp',
+                prefix='processed-raw-states-',
+                suffix='-%s.h5py' % ('train' if not is_test else 'test'))
 
-        with h5py.File(out_hdf5_file, 'a') as f:
-            g = f.create_group('attrs')
-            for k, v in attrs.items():
-                g.attrs[k] = v
+            hdf_paths[is_test] = out_hdf5_file
 
-        pandas.concat([
-            o['features'][['match_frame', 'diff_injuries', 'injuries']] \
-            for o in total_brswf],
-            ignore_index=True).to_hdf(out_hdf5_file, key='features')
+            pprint.pprint({'out_hdf5_file': out_hdf5_file, 'is_test': is_test})
 
-        with h5py.File(out_hdf5_file, 'a') as f:
-            rs_type = total_brswf[0]['raw_states']._type_
+            for it in total_brswf:
+                serialized_brs = it['_raw_states']
+                it['raw_states'] = \
+                    (serialized_brs['type'] * serialized_brs['len']) \
+                        .from_buffer(serialized_brs['buffer'])
 
-            chunk_shape = (1024, attrs['total_sequence_length'], ctypes.sizeof(rs_type))
-            f_raw_states = f.create_dataset(
-                'raw_states',
-                shape=chunk_shape,
-                chunks=chunk_shape,
-                maxshape=(None,) + chunk_shape[1:],
-                dtype=numpy.uint8)
+            attrs = total_brswf[0]['attrs']
 
-            f_raw_states.resize((0, 0, 0))
+            attrs['sequences_count'] = \
+                numpy.sum([o['attrs']['sequences_count'] for o in total_brswf])
 
-            for o in total_brswf:
-                brs = o['raw_states']
+            with h5py.File(out_hdf5_file, 'a') as f:
+                g = f.create_group('attrs')
+                for k, v in attrs.items():
+                    g.attrs[k] = v
 
-                assert len(brs) % chunk_shape[1] == 0
+            pandas.concat([
+                o['features'][['match_frame', 'diff_injuries', 'injuries']] \
+                for o in total_brswf],
+                ignore_index=True).to_hdf(out_hdf5_file, key='features')
 
-                pos = f_raw_states.shape[0]
-                add_shape = (len(brs) // chunk_shape[1],) + chunk_shape[1:]
+            with h5py.File(out_hdf5_file, 'a') as f:
+                rs_type = total_brswf[0]['raw_states']._type_
 
-                f_raw_states.resize((pos + add_shape[0],) + add_shape[1:])
+                chunk_shape = (1024, attrs['total_sequence_length'], ctypes.sizeof(rs_type))
+                f_raw_states = f.create_dataset(
+                    'raw_states',
+                    shape=chunk_shape,
+                    chunks=chunk_shape,
+                    maxshape=(None,) + chunk_shape[1:],
+                    dtype=numpy.uint8)
 
-                f_raw_states.write_direct(
-                    numpy.frombuffer(brs, dtype=numpy.uint8).reshape(add_shape),
-                    dest_sel=numpy.s_[pos:])
+                f_raw_states.resize((0, 0, 0))
 
-        return out_hdf5_file
+                for o in total_brswf:
+                    brs = o['raw_states']
+
+                    assert len(brs) % chunk_shape[1] == 0
+
+                    pos = f_raw_states.shape[0]
+                    add_shape = (len(brs) // chunk_shape[1],) + chunk_shape[1:]
+
+                    f_raw_states.resize((pos + add_shape[0],) + add_shape[1:])
+
+                    f_raw_states.write_direct(
+                        numpy.frombuffer(brs, dtype=numpy.uint8).reshape(add_shape),
+                        dest_sel=numpy.s_[pos:])
+
+        return hdf_paths
 
     @classmethod
     def load_brswf(cls, hdf_path, sequences_split=1.0):
@@ -753,29 +763,23 @@ class Datasets:
 
 
 class RawStatesMemory:
-    def __init__(self, train_hdf_path, test_hdf_path, sequences_split=1.0):
-        self.train_brswf = Datasets.load_brswf(train_hdf_path, sequences_split=sequences_split)
-        self.test_brswf = Datasets.load_brswf(test_hdf_path, sequences_split=sequences_split)
-        self.train_sample_generator = functools.partial(
-            Datasets.sample_brswf, self.train_brswf)
-        self.test_sample_generator = functools.partial(
-            Datasets.sample_brswf, self.test_brswf)
+    def __init__(self, hdf_paths, sequences_split=1.0):
+        self.brswf = [ \
+            Datasets.load_brswf(hdf_paths[is_test], sequences_split=sequences_split) \
+            for is_test in [False, True]]
+        self.sample_generator = [ \
+            functools.partial(Datasets.sample_brswf, self.brswf[is_test]) \
+            for is_test in [False, True]]
 
-    def attrs(self):
-        return copy.deepcopy(self.train_brswf['attrs'])
+    def attrs(self, is_test=False):
+        return copy.deepcopy(self.brswf[is_test]['attrs'])
 
     def nb_entries(self, is_test=False):
-        if not is_test:
-            return self.train_brswf['attrs']['sequences_count']
-        else:
-            return self.test_brswf['attrs']['sequences_count']
+        return self.brswf[is_test]['attrs']['sequences_count']
 
     def prioritized_sample(self, is_test=True):
         while True:
-            if not is_test:
-                yield from self.train_sample_generator()
-            else:
-                yield from self.test_sample_generator()
+            yield from self.sample_generator[is_test]()
 
     def prioritized_sample_classification(self, **kwargs):
         g = self.prioritized_sample(**kwargs)
