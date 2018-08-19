@@ -580,7 +580,8 @@ class Datasets:
         validation_split,
         dataset_split,
         window_length,
-        train_window_length
+        train_window_length,
+        pool_processes=2,
         ):
 
         assert len(self.raw_states_paths) > 0
@@ -592,7 +593,7 @@ class Datasets:
 
         pprint.pprint({'out_hdf5_file': out_hdf5_file})
 
-        pool = multiprocessing.Pool(processes=2)
+        pool = multiprocessing.Pool(processes=pool_processes)
 
         total_brswf = pool.map_async(
             functools.partial(
@@ -612,9 +613,13 @@ class Datasets:
                 (serialized_brs['type'] * serialized_brs['len']) \
                     .from_buffer(serialized_brs['buffer'])
 
+        attrs = total_brswf[0]['attrs']
+
+        attrs['sequences_count'] = sum([o['sequences_split'] for o in attrs])
+
         with h5py.File(out_hdf5_file, 'a') as f:
             g = f.create_group('attrs')
-            for k, v in total_brswf[0]['attrs'].items():
+            for k, v in attrs.items():
                 g.attrs[k] = v
 
         pandas.concat([
@@ -625,7 +630,7 @@ class Datasets:
         with h5py.File(out_hdf5_file, 'a') as f:
             rs_type = total_brswf[0]['raw_states']._type_
 
-            chunk_shape = (1024, total_brswf[0]['attrs']['total_sequence_length'], ctypes.sizeof(rs_type))
+            chunk_shape = (1024, attrs['total_sequence_length'], ctypes.sizeof(rs_type))
             f_raw_states = f.create_dataset(
                 'raw_states',
                 shape=chunk_shape,
@@ -652,7 +657,7 @@ class Datasets:
         return out_hdf5_file
 
     @classmethod
-    def load_brswf(cls, hdf_path):
+    def load_brswf(cls, hdf_path, sequences_split=1.0):
         brswf = {}
         with h5py.File(hdf_path, 'r') as f:
             brswf['attrs'] = dict(f['attrs'].attrs)
@@ -661,10 +666,21 @@ class Datasets:
         brswf['features']['id'] = brswf['features'].index
 
         with h5py.File(hdf_path, 'r') as f:
-            rs = (ddpg.toribash_env.toribash_state_t * numpy.prod(f['raw_states'].shape[:2]))()
-            buffer_rs = numpy.frombuffer(rs, dtype=numpy.uint8).reshape(f['raw_states'].shape)
-            f['raw_states'].read_direct(buffer_rs)
+            total_sequences = brswf['attrs']['sequences_count']
+            shrinked_count = int(total_sequences * sequences_split)
+
+            assert shrinked_count <= f['raw_states'].shape[0]
+
+            rs = (ddpg.toribash_env.toribash_state_t * \
+                (shrinked_count * f['raw_states'].shape[1]))()
+            buffer_rs = numpy.frombuffer(rs, dtype=numpy.uint8) \
+                .reshape((shrinked_count,) + f['raw_states'].shape[1:])
+            f['raw_states'].read_direct(buffer_rs, source_sel=numpy.s_[:shrinked_count])
             brswf['raw_states'] = rs
+
+            brswf['attrs']['sequences_count'] = shrinked_count
+            brswf['features'] = \
+                brswf['features'].iloc[:shrinked_count * brswf['attrs']['total_sequence_length']]
 
         return brswf
 
@@ -733,9 +749,9 @@ class Datasets:
 
 
 class RawStatesMemory:
-    def __init__(self, train_hdf_path, test_hdf_path):
-        self.train_brswf = Datasets.load_brswf(train_hdf_path)
-        self.test_brswf = Datasets.load_brswf(test_hdf_path)
+    def __init__(self, train_hdf_path, test_hdf_path, sequences_split=1.0):
+        self.train_brswf = Datasets.load_brswf(train_hdf_path, sequences_split=sequences_split)
+        self.test_brswf = Datasets.load_brswf(test_hdf_path, sequences_split=sequences_split)
         self.train_sample_generator = functools.partial(
             Datasets.sample_brswf, self.train_brswf)
         self.test_sample_generator = functools.partial(
@@ -1134,13 +1150,20 @@ class Helpers:
     def __init__(self, rsm):
         self.rsm = rsm
 
-    def train_classification(self, model, train_steps_multiplier=1.0, epochs=10):
+    def train_classification(
+        self,
+        model,
+        train_steps_multiplier=1.0,
+        test_steps_multiplier=1.0,
+        epochs=10):
 
         model.fit_generator(
             self.rsm.prioritized_sample_classification(),
             validation_data=self.rsm.prioritized_sample_classification(is_test=True),
-            steps_per_epoch=self.rsm.nb_entries() * train_steps_multiplier,
-            validation_steps=self.rsm.nb_entries(is_test=True),
+            steps_per_epoch=int(self.rsm.nb_entries() // \
+                self.rsm.attrs()['batch_size'] * train_steps_multiplier),
+            validation_steps=int(self.rsm.nb_entries(is_test=True) // \
+                self.rsm.attrs()['batch_size'] * test_steps_multiplier),
             epochs=epochs,
             verbose=1)
 
