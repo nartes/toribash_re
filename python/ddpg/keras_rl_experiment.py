@@ -481,7 +481,7 @@ class Datasets:
         min_size = df['u_i3'][1][min_group_id]
         min_coef = df['eta_pi'] / df['eta_pi'][min_group_id]
         group_norm_coef = numpy.max(min_coef)
-        group_sizes = numpy.int64(min_coef / group_norm_coef * min_size)
+        group_sizes = numpy.int64(numpy.minimum(min_size * min_coef, df['u_i3'][1]))
         total_size = numpy.sum(group_sizes) * attrs['total_sequence_length']
 
         b_raw_states = (raw_states._type_ * total_size)()
