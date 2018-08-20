@@ -667,17 +667,31 @@ class Datasets:
         return hdf_paths
 
     @classmethod
-    def load_brswf(cls, hdf_path, sequences_split=1.0):
+    def load_brswf(cls, hdf_path, dataset_split=1.0):
         brswf = {}
+
         with h5py.File(hdf_path, 'r') as f:
             brswf['attrs'] = dict(f['attrs'].attrs)
 
-        brswf['features'] = pandas.read_hdf(hdf_path, key='features')
-        brswf['features']['id'] = brswf['features'].index
+        attrs = brswf['attrs']
+
+        fetch_mask = numpy.zeros(attrs['sequences_count'], dtype=numpy.bool)
+        fetch_mask[:int(attrs['sequences_count'] * dataset_split)] = True
+        fetch_mask = numpy.random.permutation(fetch_mask)
+        fetch_ids = numpy.where(fetch_mask)[0]
+
+        fetch_ids_range = fetch_ids.repeat(attrs['total_sequence_length']) * \
+            attrs['total_sequence_length'] + \
+            numpy.arange(
+                attrs['total_sequence_length'] * fetch_ids.size) \
+                % attrs['total_sequence_length']
+
+        brswf['features'] = pandas.HDFStore(hdf_path, 'r')['features'] \
+            .iloc[fetch_ids_range].copy()
 
         with h5py.File(hdf_path, 'r') as f:
             total_sequences = brswf['attrs']['sequences_count']
-            shrinked_count = int(total_sequences * sequences_split)
+            shrinked_count = fetch_ids.size
 
             assert shrinked_count <= f['raw_states'].shape[0]
 
@@ -685,12 +699,11 @@ class Datasets:
                 (shrinked_count * f['raw_states'].shape[1]))()
             buffer_rs = numpy.frombuffer(rs, dtype=numpy.uint8) \
                 .reshape((shrinked_count,) + f['raw_states'].shape[1:])
-            f['raw_states'].read_direct(buffer_rs, source_sel=numpy.s_[:shrinked_count])
+
+            f['raw_states'].read_direct(buffer_rs, source_sel=numpy.s_[fetch_mask, ...])
             brswf['raw_states'] = rs
 
             brswf['attrs']['sequences_count'] = shrinked_count
-            brswf['features'] = \
-                brswf['features'].iloc[:shrinked_count * brswf['attrs']['total_sequence_length']]
 
         return brswf
 
@@ -759,9 +772,9 @@ class Datasets:
 
 
 class RawStatesMemory:
-    def __init__(self, hdf_paths, sequences_split=1.0):
+    def __init__(self, hdf_paths, dataset_split=1.0):
         self.brswf = [ \
-            Datasets.load_brswf(hdf_paths[is_test], sequences_split=sequences_split) \
+            Datasets.load_brswf(hdf_paths[is_test], dataset_split=dataset_split) \
             for is_test in [False, True]]
         self.sample_generator = [ \
             functools.partial(Datasets.sample_brswf, self.brswf[is_test]) \
