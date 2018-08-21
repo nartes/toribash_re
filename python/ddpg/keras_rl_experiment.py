@@ -570,11 +570,12 @@ class Datasets:
 
             attrs = copy.deepcopy(brswf['attrs'])
 
-            old_attrs = None
+            old_attrs = {}
 
             with hdf_lock:
                 with h5py.File(hdf_paths[is_test], 'a') as f:
-                    old_attrs = dict(f.attrs)
+                    if f.get('attrs', None) is not None:
+                        old_attrs = dict(f['attrs'].attrs)
 
                 attrs['sequences_count'] += old_attrs.get('sequences_count', 0)
 
@@ -700,7 +701,32 @@ class Datasets:
             buffer_rs = numpy.frombuffer(rs, dtype=numpy.uint8) \
                 .reshape((shrinked_count,) + f['raw_states'].shape[1:])
 
-            f['raw_states'].read_direct(buffer_rs, source_sel=numpy.s_[fetch_mask, ...])
+            chunks_count = int(1 / dataset_split * 10)
+            chunk_size = total_sequences // chunks_count
+            assert chunk_size > 0
+
+            chunk_temp_buffer = numpy.empty(
+                (chunk_size,) + f['raw_states'].shape[1:], dtype=numpy.uint8)
+
+            buffer_rs_pos = 0
+
+            for chunk_id in range(chunks_count):
+                start_pos = chunk_size * chunk_id
+                end_pos = min(start_pos + chunk_size, total_sequences)
+
+                chunk_fetch_mask = fetch_mask[start_pos : end_pos]
+                chunk_ids_count = numpy.sum(chunk_fetch_mask)
+
+                f['raw_states'].read_direct(
+                    chunk_temp_buffer,
+                    source_sel=numpy.s_[start_pos : end_pos, ...],
+                    dest_sel=numpy.s_[:end_pos - start_pos, ...])
+
+                buffer_rs[buffer_rs_pos : buffer_rs_pos + chunk_ids_count, ...] = \
+                    chunk_temp_buffer[chunk_fetch_mask, ...]
+
+                buffer_rs_pos += chunk_ids_count
+
             brswf['raw_states'] = rs
 
             brswf['attrs']['sequences_count'] = shrinked_count
