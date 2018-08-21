@@ -667,7 +667,7 @@ class Datasets:
         return hdf_paths
 
     @classmethod
-    def load_brswf(cls, hdf_path, dataset_split=1.0):
+    def load_brswf(cls, hdf_path, dataset_split=1.0, chunks_granularity=10):
         brswf = {}
 
         with h5py.File(hdf_path, 'r') as f:
@@ -675,23 +675,29 @@ class Datasets:
 
         attrs = brswf['attrs']
 
-        fetch_mask = numpy.zeros(attrs['sequences_count'], dtype=numpy.bool)
-        fetch_mask[:int(attrs['sequences_count'] * dataset_split)] = True
-        fetch_mask = numpy.random.permutation(fetch_mask)
-        fetch_ids = numpy.where(fetch_mask)[0]
+        chunks_total_count = int(1 / dataset_split * chunks_granularity)
+        chunk_size = attrs['sequences_count'] // chunks_total_count
+        assert chunk_size > 0
 
-        fetch_ids_range = fetch_ids.repeat(attrs['total_sequence_length']) * \
-            attrs['total_sequence_length'] + \
-            numpy.arange(
-                attrs['total_sequence_length'] * fetch_ids.size) \
-                % attrs['total_sequence_length']
+        chunk_ids = numpy.random.choice(
+            chunks_total_count,
+            int(chunks_total_count * dataset_split))
 
-        brswf['features'] = pandas.HDFStore(hdf_path, 'r')['features'] \
-            .iloc[fetch_ids_range].copy()
+        with pandas.HDFStore(hdf_path, 'r') as store:
+            raw_features = []
+
+            for chunk_id in chunk_ids:
+                start_pos = chunk_size * chunk_id
+                end_pos = min(start_pos + chunk_size, attrs['sequences_count'])
+
+                raw_features.append(store['features'].iloc[ \
+                    start_pos * attrs['total_sequence_length'] : \
+                    end_pos * attrs['total_sequence_length']])
+
+            brswf['features'] = pandas.concat(raw_features)
 
         with h5py.File(hdf_path, 'r') as f:
-            total_sequences = brswf['attrs']['sequences_count']
-            shrinked_count = fetch_ids.size
+            shrinked_count = brswf['features'].shape[0] // attrs['total_sequence_length']
 
             assert shrinked_count <= f['raw_states'].shape[0]
 
@@ -700,31 +706,20 @@ class Datasets:
             buffer_rs = numpy.frombuffer(rs, dtype=numpy.uint8) \
                 .reshape((shrinked_count,) + f['raw_states'].shape[1:])
 
-            chunks_count = int(1 / dataset_split * 10)
-            chunk_size = total_sequences // chunks_count
-            assert chunk_size > 0
-
-            chunk_temp_buffer = numpy.empty(
-                (chunk_size,) + f['raw_states'].shape[1:], dtype=numpy.uint8)
-
             buffer_rs_pos = 0
 
-            for chunk_id in range(chunks_count):
+            for chunk_id in chunk_ids:
                 start_pos = chunk_size * chunk_id
-                end_pos = min(start_pos + chunk_size, total_sequences)
-
-                chunk_fetch_mask = fetch_mask[start_pos : end_pos]
-                chunk_ids_count = numpy.sum(chunk_fetch_mask)
+                end_pos = min(start_pos + chunk_size, attrs['sequences_count'])
 
                 f['raw_states'].read_direct(
-                    chunk_temp_buffer,
+                    buffer_rs,
                     source_sel=numpy.s_[start_pos : end_pos, ...],
-                    dest_sel=numpy.s_[:end_pos - start_pos, ...])
+                    dest_sel=numpy.s_[ \
+                        buffer_rs_pos : \
+                        buffer_rs_pos + end_pos - start_pos])
 
-                buffer_rs[buffer_rs_pos : buffer_rs_pos + chunk_ids_count, ...] = \
-                    chunk_temp_buffer[chunk_fetch_mask, ...]
-
-                buffer_rs_pos += chunk_ids_count
+                buffer_rs_pos += end_pos - start_pos
 
             brswf['raw_states'] = rs
 
