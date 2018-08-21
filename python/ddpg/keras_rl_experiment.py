@@ -634,36 +634,35 @@ class Datasets:
 
         assert len(self.raw_states_paths) > 0
 
-        pool = multiprocessing.Pool(processes=pool_processes)
+        with multiprocessing.Pool(processes=pool_processes) as pool:
+            manager = multiprocessing.Manager()
 
-        manager = multiprocessing.Manager()
+            hdf_lock = manager.Lock()
 
-        hdf_lock = manager.Lock()
+            hdf_paths = {}
 
-        hdf_paths = {}
+            for is_test in [False, True]:
+                out_hdf5_file = tempfile.mktemp(
+                    dir='tmp',
+                    prefix='processed-raw-states-',
+                    suffix='-%s.h5py' % ('train' if not is_test else 'test'))
 
-        for is_test in [False, True]:
-            out_hdf5_file = tempfile.mktemp(
-                dir='tmp',
-                prefix='processed-raw-states-',
-                suffix='-%s.h5py' % ('train' if not is_test else 'test'))
+                hdf_paths[is_test] = out_hdf5_file
 
-            hdf_paths[is_test] = out_hdf5_file
+                pprint.pprint({'out_hdf5_file': out_hdf5_file, 'is_test': is_test})
 
-            pprint.pprint({'out_hdf5_file': out_hdf5_file, 'is_test': is_test})
-
-        pool.map_async(
-            functools.partial(
-                Datasets._process_raw_states_mp_kernel,
-                entries_split=entries_split,
-                batch_size=batch_size,
-                validation_split=validation_split,
-                dataset_split=dataset_split,
-                window_length=window_length,
-                train_window_length=train_window_length,
-                hdf_lock=hdf_lock,
-                hdf_paths=hdf_paths),
-            self.raw_states_paths).get()
+            pool.map_async(
+                functools.partial(
+                    Datasets._process_raw_states_mp_kernel,
+                    entries_split=entries_split,
+                    batch_size=batch_size,
+                    validation_split=validation_split,
+                    dataset_split=dataset_split,
+                    window_length=window_length,
+                    train_window_length=train_window_length,
+                    hdf_lock=hdf_lock,
+                    hdf_paths=hdf_paths),
+                self.raw_states_paths).get()
 
         return hdf_paths
 
