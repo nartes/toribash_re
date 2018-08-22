@@ -16,3 +16,4 @@ tables
 tensorflow
 tornado
 sysv_ipc
+rpdb

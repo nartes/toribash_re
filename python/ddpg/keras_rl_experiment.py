@@ -10,6 +10,7 @@ import h5py
 import pandas
 import functools
 import multiprocessing
+import multiprocessing.sharedctypes
 import ctypes
 import matplotlib.pyplot
 import sklearn
@@ -667,26 +668,74 @@ class Datasets:
         return hdf_paths
 
     @classmethod
-    def load_brswf(cls, hdf_path, dataset_split=1.0, chunks_granularity=10):
-        brswf = {}
+    def async_load_brswf(
+        cls,
+        hdf_path,
+        dataset_split=1.0,
+        chunks_granularity=10,
+        shared_rs=None):
+
+        res_queue = multiprocessing.Queue()
 
         with h5py.File(hdf_path, 'r') as f:
+            brswf = {}
+
             brswf['attrs'] = dict(f['attrs'].attrs)
 
-        attrs = brswf['attrs']
+            attrs = brswf['attrs']
 
-        chunks_total_count = int(1 / dataset_split * chunks_granularity)
-        chunk_size = attrs['sequences_count'] // chunks_total_count
-        assert chunk_size > 0
+            chunks_total_count = int(1 / dataset_split * chunks_granularity)
+            chunk_size = attrs['sequences_count'] // chunks_total_count
+            assert chunk_size > 0
 
-        chunk_ids = numpy.random.choice(
-            chunks_total_count,
-            int(chunks_total_count * dataset_split))
+            chunks_ids = numpy.random.choice(
+                chunks_total_count,
+                int(chunks_total_count * dataset_split))
+
+            shrinked_count = chunks_ids.size * chunk_size
+
+            if (numpy.max(chunks_ids) + 1) * chunk_size > attrs['sequences_count']:
+                shrinked_count -= chunk_size - (attrs['sequences_count'] % chunk_size)
+
+            if shared_rs is None:
+                shared_rs = multiprocessing.sharedctypes.Array(
+                    ddpg.toribash_env.toribash_state_t,
+                    int(chunks_ids.size * chunk_size * attrs['total_sequence_length']),
+                    lock=False)
+
+            assert len(shared_rs) >= shrinked_count * attrs['total_sequence_length']
+
+        p = multiprocessing.Process(
+                target=cls._load_brswf_mp_kernel,
+                args=(hdf_path, dataset_split, chunks_granularity, shared_rs, res_queue,
+                    brswf, attrs,chunks_total_count, chunk_size, chunks_ids, shrinked_count))
+        p.start()
+
+        return {
+            'process': p,
+            'res_queue': res_queue,
+            'shared_rs': shared_rs
+        }
+
+    @classmethod
+    def _load_brswf_mp_kernel(
+        cls,
+        hdf_path,
+        dataset_split,
+        chunks_granularity,
+        shared_rs,
+        res_queue,
+        brswf,
+        attrs,
+        chunks_total_count,
+        chunk_size,
+        chunks_ids,
+        shrinked_count):
 
         with pandas.HDFStore(hdf_path, 'r') as store:
             raw_features = []
 
-            for chunk_id in chunk_ids:
+            for chunk_id in chunks_ids:
                 start_pos = chunk_size * chunk_id
                 end_pos = min(start_pos + chunk_size, attrs['sequences_count'])
 
@@ -697,18 +746,17 @@ class Datasets:
             brswf['features'] = pandas.concat(raw_features)
 
         with h5py.File(hdf_path, 'r') as f:
-            shrinked_count = brswf['features'].shape[0] // attrs['total_sequence_length']
-
             assert shrinked_count <= f['raw_states'].shape[0]
 
-            rs = (ddpg.toribash_env.toribash_state_t * \
-                (shrinked_count * f['raw_states'].shape[1]))()
+            rs = shared_rs
+
             buffer_rs = numpy.frombuffer(rs, dtype=numpy.uint8) \
+                [:shrinked_count * numpy.prod(f['raw_states'].shape[1:])] \
                 .reshape((shrinked_count,) + f['raw_states'].shape[1:])
 
             buffer_rs_pos = 0
 
-            for chunk_id in chunk_ids:
+            for chunk_id in chunks_ids:
                 start_pos = chunk_size * chunk_id
                 end_pos = min(start_pos + chunk_size, attrs['sequences_count'])
 
@@ -721,11 +769,9 @@ class Datasets:
 
                 buffer_rs_pos += end_pos - start_pos
 
-            brswf['raw_states'] = rs
-
             brswf['attrs']['sequences_count'] = shrinked_count
 
-        return brswf
+        res_queue.put(brswf)
 
     @classmethod
     def generate_idxs_from_balanced_raw_states(cls, balanced_raw_states):
@@ -793,20 +839,68 @@ class Datasets:
 
 class RawStatesMemory:
     def __init__(self, hdf_paths, dataset_split=1.0):
-        self.brswf = [ \
-            Datasets.load_brswf(hdf_paths[is_test], dataset_split=dataset_split) \
+        self.brswf = {}
+
+        self.hdf_paths = hdf_paths
+        self.dataset_split = dataset_split
+
+        self.async_brswf = [ \
+            Datasets.async_load_brswf(hdf_paths[is_test], dataset_split=dataset_split) \
             for is_test in [False, True]]
-        self.sample_generator = [ \
-            functools.partial(Datasets.sample_brswf, self.brswf[is_test]) \
-            for is_test in [False, True]]
+
+        self.generator_usage_counts = {}
+
+        def sample_generator_proxy(is_test):
+            g = Datasets.sample_brswf(self.brswf[is_test])
+            while True:
+                yield next(g)
+                self.generator_usage_counts[is_test] += 1
+
+                if self.generator_usage_counts[is_test] >= \
+                    self.brswf[is_test]['attrs']['sequences_count'] * \
+                    self.brswf[is_test]['attrs']['window_size'] // \
+                    self.brswf[is_test]['attrs']['batch_size']:
+
+                    self.swap_brswf(is_test)
+                    g = Datasets.sample_brswf(self.brswf[is_test])
+                    self.generator_usage_counts[is_test] = 0
+
+        self.sample_generator = {}
+
+        for is_test in [False, True]:
+            self.generator_usage_counts[is_test] = 0
+            self.swap_brswf(is_test)
+            self.sample_generator[is_test] = functools.partial(sample_generator_proxy, is_test)
+
+    def swap_brswf(self, is_test):
+        async_brswf = self.async_brswf[is_test]['res_queue'].get()
+        self.async_brswf[is_test]['process'].join()
+
+        async_brswf['raw_states'] = self.async_brswf[is_test]['shared_rs']
+
+        shared_rs = None
+
+        if self.brswf.get(is_test, None) is not None:
+            shared_rs = self.brswf[is_test]['raw_states']
+
+            del self.brswf[is_test]
+
+        self.brswf[is_test] = async_brswf
+
+        self.async_brswf[is_test] = \
+            Datasets.async_load_brswf(
+                self.hdf_paths[is_test],
+                dataset_split=self.dataset_split,
+                shared_rs=shared_rs)
 
     def attrs(self, is_test=False):
         return copy.deepcopy(self.brswf[is_test]['attrs'])
 
     def nb_entries(self, is_test=False):
-        return self.brswf[is_test]['attrs']['sequences_count']
+        return self.brswf[is_test]['attrs']['sequences_count'] * \
+            self.brswf[is_test]['attrs']['window_size']
 
-    def prioritized_sample(self, is_test=True):
+    def prioritized_sample(self, is_test=False):
         while True:
             yield from self.sample_generator[is_test]()
 

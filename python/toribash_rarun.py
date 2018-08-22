@@ -28,14 +28,10 @@ os.environ['TORIBASH_PROJECT_ROOT'] =\
 os.environ['R2_PIPE_GIT'] = os.path.join(
     os.environ['TORIBASH_PROJECT_ROOT'], 'deps', 'radare2-r2pipe', 'python')
 
-os.environ['RPDB_GIT'] = os.path.join(
-    os.environ['TORIBASH_PROJECT_ROOT'], 'deps', 'rpdb')
-
 os.environ['AUTOPEP8_BINARY'] = os.environ.get('AUTOPEP8_BINARY') or\
     sys.executable + " -m autopep8"
 
-for p, e in [(os.environ['R2_PIPE_GIT'], 'not found GIT r2pipe'),
-             (os.environ['RPDB_GIT'], 'not found GIT rpdb')]:
+for p, e in [(os.environ['R2_PIPE_GIT'], 'not found GIT r2pipe')]:
     try:
         if not os.path.exists(p):
             raise ValueError(r"path doesn't exist %s, %s" % (p, e))
