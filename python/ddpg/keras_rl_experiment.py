@@ -739,9 +739,10 @@ class Datasets:
                 start_pos = chunk_size * chunk_id
                 end_pos = min(start_pos + chunk_size, attrs['sequences_count'])
 
-                raw_features.append(store['features'].iloc[ \
-                    start_pos * attrs['total_sequence_length'] : \
-                    end_pos * attrs['total_sequence_length']])
+                raw_features.append(store.select(
+                    key='features',
+                    start=start_pos * attrs['total_sequence_length'],
+                    stop=end_pos * attrs['total_sequence_length']))
 
             brswf['features'] = pandas.concat(raw_features)
 
