@@ -341,16 +341,18 @@ class LocalMemory(rl.memory.SequentialMemory):
 
 
 class Datasets:
-    def __init__(self, raw_states_paths):
-        self.raw_states_paths = raw_states_paths
-
     @classmethod
     def get_entries_count(cls, raw_states_path):
         return os.stat(raw_states_path).st_size \
             // ctypes.sizeof(ddpg.toribash_env.toribash_state_t)
 
     @classmethod
-    def get_dataset(cls, raw_states_path, start_entry=None, end_entry=None):
+    def get_dataset(
+        cls,
+        raw_states_path,
+        start_entry=None,
+        end_entry=None,
+        rs_ctypes=None):
         if start_entry is None:
             start_entry = 0
 
@@ -361,22 +363,98 @@ class Datasets:
 
         assert start_entry >= 0 and start_entry < end_entry and end_entry <= entries_count
 
-        raw_states_buf = None
+        if rs_ctypes is None:
+            rs_ctypes = (ddpg.toribash_env.toribash_state_t * (end_entry - start_entry + 1))()
 
         with io.open(raw_states_path, 'rb') as f:
             f.seek(start_entry * ctypes.sizeof(ddpg.toribash_env.toribash_state_t))
-            raw_states_buf = numpy.fromfile(
-                raw_states_path,
-                dtype=numpy.uint8,
-                count=(end_entry - start_entry) * \
-                    ctypes.sizeof(ddpg.toribash_env.toribash_state_t))
+            assert f.readinto(numpy.frombuffer(rs_ctypes, dtype=numpy.uint8)) == \
+                ctypes.sizeof(rs_ctypes)
 
-        raw_states = (ddpg.toribash_env.toribash_state_t * \
-            (len(raw_states_buf) // ctypes.sizeof(ddpg.toribash_env.toribash_state_t)) \
-            ).from_buffer(raw_states_buf)
+        return rs_ctypes
 
+    @classmethod
+    def get_dataset_random_part(
+        cls,
+        rs_dat_paths,
+        dataset_split=1.0,
+        granularity=10,
+        validation_split=0.3,
+        is_test=False,
+        rs_ctypes=None):
 
-        return raw_states
+        sizes = [cls.get_entries_count(p) for p in rs_dat_paths]
+
+        z = numpy.sum(sizes)
+
+        chunk_size = int(z * dataset_split / granularity)
+
+        a = (z + chunk_size - 1) // chunk_size
+
+        c = int(a * (1 - validation_split))
+        d = a - c
+
+        f = int(c * dataset_split)
+        g = int(d * dataset_split)
+
+        chunk_ids = numpy.sort(
+            numpy.random.choice(d if is_test else c, g if is_test else f, replace=False)) \
+            + (c if is_test else 0)
+
+        if not is_test:
+            chunks_boundaries = [0, int(z * (1 - validation_split))]
+        else:
+            chunks_boundaries = [int(z * (1 - validation_split)), z]
+
+        subset_entries = chunk_ids.size * chunk_size
+
+        if rs_ctypes is None:
+            rs_ctypes = (ddpg.toribash_env.toribash_state_t * subset_entries)()
+
+        assert len(rs_ctypes) >= subset_entries
+
+        cum_sizes = numpy.cumsum(sizes)
+
+        rs_pos = 0
+        k = 0
+        cur_pos = 0
+
+        for i in chunk_ids:
+            start_pos = max(chunk_size * i, chunks_boundaries[0])
+            end_pos = min(chunk_size * (i + 1), chunks_boundaries[1])
+
+            while cum_sizes[k] - sizes[k] + cur_pos < start_pos:
+                if cum_sizes[k] < start_pos:
+                    k += 1
+                    cur_pos = 0
+                else:
+                    cur_pos = start_pos - cum_sizes[k] + sizes[k]
+
+            assert cum_sizes[k] - sizes[k] + cur_pos < end_pos
+
+            cur_start_pos = cum_sizes[k] - sizes[k] + cur_pos
+            cur_end_pos = min(cum_sizes[k], end_pos)
+
+            cls.get_dataset(
+                rs_dat_paths[k],
+                start_entry=cur_start_pos - cum_sizes[k] + sizes[k],
+                end_entry=cur_end_pos - cum_sizes[k] + sizes[k],
+                rs_ctypes = \
+                    (rs_ctypes._type_ * (cur_end_pos - cur_start_pos)).from_buffer( \
+                        numpy.frombuffer(rs_ctypes, numpy.uint8) \
+                        .reshape(-1, ctypes.sizeof(rs_ctypes._type_)) \
+                        [rs_pos:][:cur_end_pos - cur_start_pos]))
+
+            rs_pos += cur_end_pos - cur_start_pos
+
+            cur_pos += cur_end_pos - cur_start_pos
+
+        rs_numpy = numpy.frombuffer(rs_ctypes, numpy.uint8) \
+                .reshape(-1, ctypes.sizeof(rs_ctypes._type_))
+
+        rs_numpy[rs_pos:] = rs_numpy[:rs_numpy.shape[0] - rs_pos]
+
+        return rs_ctypes
 
     @classmethod
     def get_some_features(cls, raw_states):
@@ -393,24 +471,13 @@ class Datasets:
     def get_distribution_features(
         cls,
         features,
-        batch_size,
-        is_test,
-        validation_split,
-        dataset_split,
         window_length,
         train_window_length):
 
         total_sequence_length = train_window_length + 1
         window_size = total_sequence_length - window_length
 
-        raw = None
-
-        if not is_test:
-            td = features.iloc[:int(features.shape[0] * dataset_split)]
-            raw = td.iloc[:-int(td.shape[0] * validation_split)]
-        else:
-            td = features.iloc[:int(features.shape[0] * dataset_split)]
-            raw = td.iloc[-int(td.shape[0] * validation_split):]
+        raw = features
 
         z1 = raw['id'].values
         z2 = (numpy.arange(
@@ -465,7 +532,6 @@ class Datasets:
                 'eta_g': eta_g
             },
             'attrs': {
-                'batch_size': batch_size,
                 'window_length': window_length,
                 'train_window_length': train_window_length,
                 'window_size': window_size,
@@ -541,248 +607,6 @@ class Datasets:
             yield df['z1'][df['s_i3']['id'].values[hamma]]
 
     @classmethod
-    def _process_raw_states_mp_kernel(
-        cls,
-        rsp,
-        entries_split,
-        batch_size,
-        validation_split,
-        dataset_split,
-        window_length,
-        train_window_length,
-        hdf_lock,
-        hdf_paths):
-
-        rs = cls.get_dataset(
-            rsp,
-            end_entry=int(cls.get_entries_count(rsp) * entries_split))
-        fs = cls.get_some_features(rs)
-
-        for is_test in [False, True]:
-            df = cls.get_distribution_features(
-                fs,
-                batch_size=batch_size,
-                is_test=is_test,
-                validation_split=validation_split,
-                dataset_split=dataset_split,
-                window_length=window_length,
-                train_window_length=train_window_length)
-            brswf = cls.get_balanced_raw_states_with_features(rs, fs, df)
-
-            attrs = copy.deepcopy(brswf['attrs'])
-
-            old_attrs = {}
-
-            with hdf_lock:
-                with h5py.File(hdf_paths[is_test], 'a') as f:
-                    if f.get('attrs', None) is not None:
-                        old_attrs = dict(f['attrs'].attrs)
-
-                attrs['sequences_count'] += old_attrs.get('sequences_count', 0)
-
-                with h5py.File(hdf_paths[is_test], 'a') as f:
-                    if f.get('attrs', None) is None:
-                        g = f.create_group('attrs')
-                    else:
-                        g = f['attrs']
-
-                    for k, v in attrs.items():
-                        g.attrs[k] = v
-
-                brswf['features'][['match_frame', 'diff_injuries', 'injuries']]. \
-                    to_hdf(hdf_paths[is_test], key='features', append=True)
-
-                with h5py.File(hdf_paths[is_test], 'a') as f:
-                    rs_type = brswf['raw_states']._type_
-
-                    chunk_shape = (1024, attrs['total_sequence_length'], ctypes.sizeof(rs_type))
-                    if f.get('raw_states', None) is None:
-                        f_raw_states = f.create_dataset(
-                            'raw_states',
-                            shape=chunk_shape,
-                            chunks=chunk_shape,
-                            maxshape=(None,) + chunk_shape[1:],
-                            dtype=numpy.uint8)
-
-                        f_raw_states.resize((0, 0, 0))
-                    else:
-                        f_raw_states = f['raw_states']
-
-
-                    brs = brswf['raw_states']
-
-                    assert len(brs) % chunk_shape[1] == 0
-
-                    pos = f_raw_states.shape[0]
-                    add_shape = (len(brs) // chunk_shape[1],) + chunk_shape[1:]
-
-                    f_raw_states.resize((pos + add_shape[0],) + add_shape[1:])
-
-                    f_raw_states.write_direct(
-                        numpy.frombuffer(brs, dtype=numpy.uint8).reshape(add_shape),
-                        dest_sel=numpy.s_[pos:])
-
-    def process_raw_states(
-        self,
-        entries_split,
-        batch_size,
-        validation_split,
-        dataset_split,
-        window_length,
-        train_window_length,
-        pool_processes=2,
-        ):
-
-        assert len(self.raw_states_paths) > 0
-
-        with multiprocessing.Pool(processes=pool_processes) as pool:
-            manager = multiprocessing.Manager()
-
-            hdf_lock = manager.Lock()
-
-            hdf_paths = {}
-
-            for is_test in [False, True]:
-                out_hdf5_file = tempfile.mktemp(
-                    dir='tmp',
-                    prefix='processed-raw-states-',
-                    suffix='-%s.h5py' % ('train' if not is_test else 'test'))
-
-                hdf_paths[is_test] = out_hdf5_file
-
-                pprint.pprint({'out_hdf5_file': out_hdf5_file, 'is_test': is_test})
-
-            pool.map_async(
-                functools.partial(
-                    Datasets._process_raw_states_mp_kernel,
-                    entries_split=entries_split,
-                    batch_size=batch_size,
-                    validation_split=validation_split,
-                    dataset_split=dataset_split,
-                    window_length=window_length,
-                    train_window_length=train_window_length,
-                    hdf_lock=hdf_lock,
-                    hdf_paths=hdf_paths),
-                self.raw_states_paths).get()
-
-        return hdf_paths
-
-    @classmethod
-    def async_load_brswf(
-        cls,
-        hdf_path,
-        dataset_split=1.0,
-        chunks_granularity=10,
-        shared_rs=None):
-
-        res_queue = multiprocessing.Queue()
-
-        with h5py.File(hdf_path, 'r') as f:
-            brswf = {}
-
-            brswf['attrs'] = dict(f['attrs'].attrs)
-
-            attrs = brswf['attrs']
-
-            chunks_total_count = int(1 / dataset_split * chunks_granularity)
-            chunk_size = attrs['sequences_count'] // chunks_total_count
-            assert chunk_size > 0
-
-            chunks_ids = numpy.random.choice(
-                chunks_total_count,
-                int(chunks_total_count * dataset_split))
-
-            shrinked_count = chunks_ids.size * chunk_size
-
-            if (numpy.max(chunks_ids) + 1) * chunk_size > attrs['sequences_count']:
-                shrinked_count -= chunk_size - (attrs['sequences_count'] % chunk_size)
-
-            if shared_rs is None:
-                shared_rs = multiprocessing.sharedctypes.Array(
-                    ddpg.toribash_env.toribash_state_t,
-                    int(chunks_ids.size * chunk_size * attrs['total_sequence_length']),
-                    lock=False)
-
-            assert len(shared_rs) >= shrinked_count * attrs['total_sequence_length']
-
-        p = multiprocessing.Process(
-                target=cls._load_brswf_mp_kernel,
-                args=(hdf_path, dataset_split, chunks_granularity, shared_rs, res_queue,
-                    brswf, attrs,chunks_total_count, chunk_size, chunks_ids, shrinked_count))
-        p.start()
-
-        return {
-            'process': p,
-            'res_queue': res_queue,
-            'shared_rs': shared_rs
-        }
-
-    @classmethod
-    def _load_brswf_mp_kernel(
-        cls,
-        hdf_path,
-        dataset_split,
-        chunks_granularity,
-        shared_rs,
-        res_queue,
-        brswf,
-        attrs,
-        chunks_total_count,
-        chunk_size,
-        chunks_ids,
-        shrinked_count):
-
-        with pandas.HDFStore(hdf_path, 'r') as store:
-            raw_features = []
-
-            for chunk_id in chunks_ids:
-                start_pos = chunk_size * chunk_id
-                end_pos = min(start_pos + chunk_size, attrs['sequences_count'])
-
-                raw_features.append(store.select(
-                    key='features',
-                    start=start_pos * attrs['total_sequence_length'],
-                    stop=end_pos * attrs['total_sequence_length']))
-
-            brswf['features'] = pandas.concat(raw_features)
-
-        with h5py.File(hdf_path, 'r') as f:
-            assert shrinked_count <= f['raw_states'].shape[0]
-
-            rs = shared_rs
-
-            buffer_rs = numpy.frombuffer(rs, dtype=numpy.uint8) \
-                [:shrinked_count * numpy.prod(f['raw_states'].shape[1:])] \
-                .reshape((shrinked_count,) + f['raw_states'].shape[1:])
-
-            buffer_rs_pos = 0
-
-            for chunk_id in chunks_ids:
-                start_pos = chunk_size * chunk_id
-                end_pos = min(start_pos + chunk_size, attrs['sequences_count'])
-
-                f['raw_states'].read_direct(
-                    buffer_rs,
-                    source_sel=numpy.s_[start_pos : end_pos, ...],
-                    dest_sel=numpy.s_[ \
-                        buffer_rs_pos : \
-                        buffer_rs_pos + end_pos - start_pos])
-
-                buffer_rs_pos += end_pos - start_pos
-
-            brswf['attrs']['sequences_count'] = shrinked_count
-
-        res_queue.put(brswf)
-
-    @classmethod
-    def generate_idxs_from_balanced_raw_states(cls, balanced_raw_states):
-        attrs = balanced_raw_states['attrs']
-
-        while True:
-            yield numpy.random.choice(attrs['sequences_count'], attrs['batch_size']) * \
-                attrs['total_sequence_length'] + attrs['total_sequence_length'] - 1
-
-    @classmethod
     def sample_brswf(cls, brswf):
         return cls.generate_normalized_dataset(
             brswf['raw_states'],
@@ -839,60 +663,38 @@ class Datasets:
 
 
 class RawStatesMemory:
-    def __init__(self, hdf_paths, dataset_split=1.0):
-        self.brswf = {}
+    def __init__(
+        self,
+        hdf_paths,
+        dataset_split=1.0,
+        validation_split=0.3,
+        window_length=3,
+        train_window_length=3):
 
         self.hdf_paths = hdf_paths
         self.dataset_split = dataset_split
 
-        self.async_brswf = [ \
-            Datasets.async_load_brswf(hdf_paths[is_test], dataset_split=dataset_split) \
-            for is_test in [False, True]]
-
-        self.generator_usage_counts = {}
-
-        def sample_generator_proxy(is_test):
-            g = Datasets.sample_brswf(self.brswf[is_test])
-            while True:
-                yield next(g)
-                self.generator_usage_counts[is_test] += 1
-
-                if self.generator_usage_counts[is_test] >= \
-                    self.brswf[is_test]['attrs']['sequences_count'] * \
-                    self.brswf[is_test]['attrs']['window_size'] // \
-                    self.brswf[is_test]['attrs']['batch_size']:
-
-                    self.swap_brswf(is_test)
-                    g = Datasets.sample_brswf(self.brswf[is_test])
-                    self.generator_usage_counts[is_test] = 0
-
-        self.sample_generator = {}
+        self.brswf = {}
 
         for is_test in [False, True]:
-            self.generator_usage_counts[is_test] = 0
-            self.swap_brswf(is_test)
-            self.sample_generator[is_test] = functools.partial(sample_generator_proxy, is_test)
+            rs = Datasets.get_dataset_random_part(
+                self.hdf_paths,
+                is_test=is_test,
+                dataset_split=dataset_split,
+                validation_split=validation_split)
 
-    def swap_brswf(self, is_test):
-        async_brswf = self.async_brswf[is_test]['res_queue'].get()
-        self.async_brswf[is_test]['process'].join()
+            fs = Datasets.get_some_features(rs)
 
-        async_brswf['raw_states'] = self.async_brswf[is_test]['shared_rs']
+            df = Datasets.get_distribution_features(
+                fs,
+                window_length=window_length,
+                train_window_length=train_window_length)
 
-        shared_rs = None
+            self.brswf[is_test] = Datasets.get_balanced_raw_states_with_features(rs, fs, df)
 
-        if self.brswf.get(is_test, None) is not None:
-            shared_rs = self.brswf[is_test]['raw_states']
-
-            del self.brswf[is_test]
-
-        self.brswf[is_test] = async_brswf
-
-        self.async_brswf[is_test] = \
-            Datasets.async_load_brswf(
-                self.hdf_paths[is_test],
-                dataset_split=self.dataset_split,
-                shared_rs=shared_rs)
+        self.sample_generator = [ \
+            functools.partial(Datasets.sample_brswf, self.brswf[is_test])
+            for is_test in [False, True]]
 
     def attrs(self, is_test=False):
         return copy.deepcopy(self.brswf[is_test]['attrs'])
