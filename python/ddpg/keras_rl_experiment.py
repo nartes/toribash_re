@@ -589,9 +589,10 @@ class Datasets:
         }
 
     @classmethod
-    def generate_balanced_idxs(cls, distribution_features):
+    def generate_balanced_idxs(cls, distribution_features, batch_size):
         df = distribution_features['distribution_features']
-        attrs = distribution_features['attrs']
+        attrs = copy.deepcopy(distribution_features['attrs'])
+        attrs['batch_size'] = batch_size
 
         while True:
             eta = df['eta_g'].rvs(
@@ -607,13 +608,13 @@ class Datasets:
             yield df['z1'][df['s_i3']['id'].values[hamma]]
 
     @classmethod
-    def sample_brswf(cls, brswf):
+    def sample_brswf(cls, brswf, batch_size):
         return cls.generate_normalized_dataset(
             brswf['raw_states'],
             brswf['features'],
             brswf,
-            cls.generate_idxs_from_balanced_raw_states(
-                brswf))
+            cls.generate_balanced_idxs(
+                brswf, batch_size=batch_size))
 
     @classmethod
     def generate_normalized_dataset(
@@ -669,10 +670,13 @@ class RawStatesMemory:
         dataset_split=1.0,
         validation_split=0.3,
         window_length=3,
-        train_window_length=3):
+        train_window_length=3,
+        batch_size=64):
 
         self.hdf_paths = hdf_paths
         self.dataset_split = dataset_split
+
+        self.batch_size = batch_size
 
         self.brswf = {}
 
@@ -690,18 +694,28 @@ class RawStatesMemory:
                 window_length=window_length,
                 train_window_length=train_window_length)
 
-            self.brswf[is_test] = Datasets.get_balanced_raw_states_with_features(rs, fs, df)
+            df['raw_states'] = rs
+            df['features'] = fs
+            self.brswf[is_test] = df
+
+            #Datasets.get_balanced_raw_states_with_features(rs, fs, df)
 
         self.sample_generator = [ \
-            functools.partial(Datasets.sample_brswf, self.brswf[is_test])
+            functools.partial(
+                Datasets.sample_brswf,
+                self.brswf[is_test],
+                batch_size=batch_size)
             for is_test in [False, True]]
 
     def attrs(self, is_test=False):
-        return copy.deepcopy(self.brswf[is_test]['attrs'])
+        attrs = copy.deepcopy(self.brswf[is_test]['attrs'])
+        attrs['batch_size'] = self.batch_size
+
+        return attrs
+
 
     def nb_entries(self, is_test=False):
-        return self.brswf[is_test]['attrs']['sequences_count'] * \
-            self.brswf[is_test]['attrs']['window_size']
+        return len(self.brswf[is_test]['raw_states'])
 
     def prioritized_sample(self, is_test=False):
         while True:
