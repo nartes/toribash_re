@@ -131,6 +131,77 @@ And later on validate the result across different values of $m=\overline{3,6}$, 
 }
 \end{center}
 
+In the table above 0's recall equals 82 when $m=6$ whilst training.
+I can't reproduce that result.
+
+At first I couldn't explain the values of recall estimation.
+It was decreasing across $m=3,6$ at validation.
+But values were different depending on $m$ at training.
+
+I've increased dataset size from 2.8GiB to 26GiB. The experiment with recall
+has been repeated.
+No major improvement is present.
+We should change the model.
+
+\begin{center}
+{\tiny
+\begin{tabular}{|c|c|c|c|c|}
+  \hline
+  twl (test) & m (train) & 0s recall (\%) & 1s recall (\%) & epochs (0.1 dataset split) \\ \hline
+	3	&	3		& 85.5	& 91.2	&	1 \\ \hline
+	4	&	3		& 71.2	& 91.0	&	1 \\ \hline
+	5	&	3		& 60.0	& 91.2	&	1 \\ \hline
+	6	&	3		& 53.7	& 91.1	&	1 \\ \hline
+\end{tabular}
+}
+\end{center}
+
+\begin{center}
+{\tiny
+\begin{tabular}{|c|c|c|c|c|c|c|}
+  \hline
+  twl	& m (train)	& filters\_size	& epochs (0.1 dataset split)	& 0s recall (\%)	&
+		1s recall (\%)	& validation\_size \\ \hline
+	3	&	3	&	128	&	10	&	87.8	&	90.9	&	64 $\times$ 1000 \\ \hline
+	3	&	3	&	 64	&	20	&	87.2	&	92.4	&	64 $\times$ 1000 \\ \hline
+	4	&	3	&	128	&	10	&	75.0	&	92.0	&	64 $\times$ 1000 \\ \hline
+	4	&	3	&	 64	&	20	&	73.7	&	92.8	&	64 $\times$ 1000 \\ \hline
+	5	&	3	&	128	&	10	&	65.4	&	91.5	&	64 $\times$ 1000 \\ \hline
+	5	&	3	&	 64	&	20	&	63.5	&	92.9	&	64 $\times$ 1000 \\ \hline
+	6	&	3	&	128	&	10	&	58.0	&	91.6	&	64 $\times$ 1000 \\ \hline
+	6	&	3	&	 64	&	20	&	57.0	&	92.5	&	64 $\times$ 1000 \\ \hline \hline
+	3	&	6	&	128	&	20	&	94.6	&	77.9	&	64 $\times$ 1000 \\ \hline
+	3	&	6	&	 64	&	28	&	93.9	&	81.5	&	64 $\times$ 1000 \\ \hline
+	4	&	6	&	128	&	20	&	87.7	&	79.3	&	64 $\times$ 1000 \\ \hline
+	4	&	6	&	 64	&	28	&	85.9	&	81.1	&	64 $\times$ 1000 \\ \hline
+	5	&	6	&	128	&	20	&	83.1	&	79.7	&	64 $\times$ 1000 \\ \hline
+	5	&	6	&	 64	&	28	&	80.2	&	81.2	&	64 $\times$ 1000 \\ \hline
+	6	&	6	&	128	&	20	&	78.8	&	78.6	&	64 $\times$ 1000 \\ \hline
+	6	&	6	&	 64	&	28	&	76.0	&	79.7	&	64 $\times$ 1000 \\ \hline
+\end{tabular}
+}
+\end{center}
+
+To get better understanding on models behaviour I've done tests on models disagreement.
+
+\begin{center}
+{\tiny
+\begin{tabular}{|c|c|c|c|c|c|c|c|c|c|}
+  \hline
+	model	&	twl	&	m (train)	&	filters size	&	0s recall (\%)	&	1s recall (\%)	&
+		$[0, 0]$ &	$[0, 1]$	&	$[1, 0]$	&	$[1, 1]$ \\ \hline
+	0	&	3	&	6	&	64	&	94.0	&	81.3	&	47.4	&	 9.1	&	 0.3	&	43.3	\\ \hline
+	1	&	3	&	3	&	64	&	87.3	&	92.3	&	    	&				&				&	    	\\ \hline
+	0	&	4	&	6	&	64	&	86.0	&	81.8	&	41.0	&	11.9	&	 0.3	&	47.3	\\ \hline
+	1	&	4	&	3	&	64	&	73.5	&	92.4	&	    	&				&				&	    	\\ \hline
+	0	&	5	&	6	&	64	&	80.7	&	80.9	&	35.3	&	14.6	&	 0.3	&	49.8	\\ \hline
+	1	&	5	&	3	&	64	&	63.9	&	92.9	&	    	&				&				&	    	\\ \hline
+	0	&	6	&	6	&	64	&	75.3	&	81.0	&	31.1	&	15.8	&	 0.3	&	52.8	\\ \hline
+	1	&	6	&	3	&	64	&	55.8	&	92.7	&	    	&				&				&	    	\\ \hline
+\end{tabular}
+}
+\end{center}
+
 \cleardoublepage
 
 \section{Conclusion}
