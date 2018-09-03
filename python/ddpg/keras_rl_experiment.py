@@ -732,6 +732,13 @@ class RawStatesMemory:
 
             yield b[0], keras.utils.to_categorical(b[1], 2)
 
+    def prioritized_sample_regression(self, **kwargs):
+        g = self.prioritized_sample(**kwargs)
+        while True:
+            b = next(g)
+
+            yield b
+
 
 class Critics:
     def __init__(
@@ -748,9 +755,18 @@ class Critics:
         self.batch_size = batch_size
         self.window_length = window_length
 
-    def model2(self, capacity=1, depth=(1, 1), inputs_idxs=numpy.s_[:], activations=('relu',),
-            filters=(16, 16), dropout=0.3, is_regression=False, is_batch_normalized=False,
-            use_lstm=False):
+    def model2(
+        self,
+    capacity=1,
+    depth=(1, 1),
+    inputs_idxs=numpy.s_[:],
+    activations=('relu',),
+    filters=(16, 16),
+    dropout=0.3,
+    is_regression=False,
+    is_batch_normalized=False,
+    use_lstm=False):
+
         if type(depth) is not list:
             depth = [depth, depth]
 
@@ -1118,22 +1134,19 @@ class Helpers:
     def train_regression(
         self,
         model,
-        batch_size=64,
-        dataset_split=0.4,
+        train_steps_multiplier=1.0,
+        test_steps_multiplier=1.0,
         epochs=10):
 
-        self.model = model
-
-        train_steps = int(self.rsm.nb_entries * dataset_split) // batch_size
-        test_steps = train_steps * 0.3
         model.fit_generator(
-            iter(lambda : self.rsm.prioritized_sample_regression \
-                (batch_size=batch_size, dataset_split=dataset_split), []),
-            validation_data=iter(lambda : self.rsm.prioritized_sample_regression \
-                (batch_size=batch_size, is_test=True, dataset_split=dataset_split), []),
-            steps_per_epoch=train_steps,
-            validation_steps=test_steps,
-            epochs=epochs)
+            self.rsm.prioritized_sample_regression(),
+            validation_data=self.rsm.prioritized_sample_regression(is_test=True),
+            steps_per_epoch=int(self.rsm.nb_entries() // \
+                self.rsm.attrs()['batch_size'] * train_steps_multiplier),
+            validation_steps=int(self.rsm.nb_entries(is_test=True) // \
+                self.rsm.attrs()['batch_size'] * test_steps_multiplier),
+            epochs=epochs,
+            verbose=1)
 
     def plot_samples(self, sample_size=100):
         s = self.rsm.prioritized_sample_classification(batch_size=sample_size)
