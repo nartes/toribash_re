@@ -622,7 +622,8 @@ class Datasets:
         raw_states,
         features,
         distribution_features,
-        balanced_idxs):
+        balanced_idxs,
+        has_noise_injection=True):
 
         attrs = distribution_features['attrs']
 
@@ -643,7 +644,10 @@ class Datasets:
                     [numpy.array(raw_states[k].players[p].joints_pos_3d) \
                         for p in range(2)] for k in range(i - attrs['window_length'], i)], []))
 
-                X[0].append(numpy.random.normal(x, 1e-5))
+                if has_noise_injection:
+                    X[0].append(numpy.random.normal(x, 1e-5))
+                else:
+                    X[0].append(x)
 
                 actions_list = sum([
                     [numpy.concatenate([numpy.array(raw_states[k].players[p].joints),
@@ -651,7 +655,10 @@ class Datasets:
                      for k in range(i - attrs['window_length'] + 1, i + 1)], [])
                 actions = numpy.stack(actions_list)
 
-                X[1].append(numpy.random.normal(actions, 0.1))
+                if has_noise_injection:
+                    X[1].append(numpy.random.normal(actions, 0.1))
+                else:
+                    X[1].append(actions)
 
             Y = features['diff_injuries'].values[batch_idxs]
 
@@ -768,6 +775,14 @@ class Models:
             (1,),
             (2,),
             (22,)
+            ]
+
+        te = ddpg.toribash_env.ToribashEnvironment(None)
+
+        self.output_bounds = [
+            None,
+            None,
+            (te.action_bound[0, :22], te.action_bound[1, :22])
             ]
 
         self.batch_size = batch_size
@@ -976,6 +991,11 @@ class Models:
                 y = keras.layers.Dense(*self.output_shapes[1], activation='softmax')(y)
         else:
             y = keras.layers.Dense(*self.output_shapes[2], activation='elu')(y)
+            y = keras.layers.Lambda(lambda x:
+                keras.backend.tf.clip_by_value(
+                    x,
+                    *[keras.backend.tf.convert_to_tensor(b.reshape(1, -1), dtype=numpy.float32) \
+                        for b in self.output_bounds[2]]))(y)
 
         model = keras.models.Model(inputs=inputs, outputs=y)
 
@@ -1058,6 +1078,68 @@ class Helpers:
                 self.rsm.attrs()['batch_size'] * test_steps_multiplier),
             epochs=epochs,
             verbose=1)
+
+    @classmethod
+    def actor_input_from_raw_states(cls, raw_states, actor):
+        attrs = {
+            'window_length': actor.input_shape[0][1] // 2,
+            'window_size': 1,
+            'batch_size': actor.input_shape[0][0]
+        }
+
+        if len(raw_states) < attrs['window_length']:
+            extended_raw_states = \
+                raw_states[:1] * (attrs['window_length'] - len(raw_states)) + \
+                raw_states
+        else:
+            extended_raw_states = raw_states
+
+        features = pandas.DataFrame({
+            'diff_injuries': numpy.zeros(len(extended_raw_states))
+        })
+
+
+        balanced_idxs = (i for i in [[len(extended_raw_states) - 1] * attrs['batch_size']])
+
+        b = next(Datasets.generate_normalized_dataset(
+            extended_raw_states,
+            features,
+            {'attrs': attrs},
+            balanced_idxs,
+            has_noise_injection=False))
+
+        return [b[0][0], b[0][1][:, 2:, :]]
+
+    @classmethod
+    def play_with_actor(cls, actor, client_key, has_workaround=False):
+        try:
+            raw_states = []
+
+            te = ddpg.toribash_env.ToribashEnvironment(toribash_msg_queue_key=client_key)
+
+            while True:
+                st = te.reset()
+                while True:
+                    raw_states.append(te._cur_state)
+                    act0 = actor.predict(
+                        cls.actor_input_from_raw_states(
+                            raw_states,
+                            actor))[0, ...].flatten()
+                    if has_workaround:
+                        act0 = numpy.clip(
+                            act0,
+                            te.action_bound[0, :22],
+                            te.action_bound[1, :22])
+                    act1 = numpy.array([3,] * 20 + [1,] * 2, dtype=numpy.float32)
+                    o, r, d, i = te.step(numpy.concatenate([act0, act1]))
+                    if d:
+                        break
+                if len(raw_states) > 100:
+                    raw_states = raw_states[-100:]
+        except KeyboardInterrupt:
+            pass
+        finally:
+            te.close()
 
     def mine_dataset(self, client_key, steps_limit, save_prefix):
         iteration = 0

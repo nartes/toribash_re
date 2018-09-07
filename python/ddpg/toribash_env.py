@@ -84,19 +84,20 @@ class ToribashEnvironment:
     MAX_MESSAGE_SIZE = 8192
 
     def __init__(self, toribash_msg_queue_key=0xffaaffbb):
-        self._toribash_msg_queue_key = ctypes.c_uint32(toribash_msg_queue_key)
+        if toribash_msg_queue_key is not None:
+            self._toribash_msg_queue_key = ctypes.c_uint32(toribash_msg_queue_key)
 
-        self._msg_queue = sysv_ipc.MessageQueue(
-            self._toribash_msg_queue_key.value,
-            max_message_size = self.MAX_MESSAGE_SIZE)
+            self._msg_queue = sysv_ipc.MessageQueue(
+                self._toribash_msg_queue_key.value,
+                max_message_size = self.MAX_MESSAGE_SIZE)
 
-        self._next_msg = message_t.TORIBASH_LUA_DOSTRING
-        self._prev_state = None
-        self._cur_state = None
-        self._done = False
+            self._next_msg = message_t.TORIBASH_LUA_DOSTRING
+            self._prev_state = None
+            self._cur_state = None
+            self._done = False
 
-        self._terminal_state = numpy.zeros_like(
-            toribash_state_t().to_tensor(), dtype=numpy.float32)
+            self._terminal_state = numpy.zeros_like(
+                toribash_state_t().to_tensor(), dtype=numpy.float32)
 
         self.state_dim = toribash_state_t.DIM
         self.action_bound = toribash_action_t.BOUNDS.T
