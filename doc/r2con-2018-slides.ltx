@@ -1,0 +1,59 @@
+\documentclass[unicode]{beamer}
+
+\mode<presentation>
+{
+  \usetheme{Warsaw}
+%  \setbeamertemplate{headline}{}
+%  \setbeamertemplate{footline}{}
+}
+
+\usepackage[utf8]{inputenc}
+%\usepackage[T2A]{fontenc}
+\usepackage{amssymb, amsmath, hyperref}
+%\usepackage[main=russian,english]{babel}
+
+\title{Reversing Toribash - Martial Arts Simulator - using radare2}
+\author{Siarhei Siniak}
+\date{08.09.2018}
+
+\begin{document}
+
+\begin{frame}
+  \titlepage
+\end{frame}
+
+\section{Initial task}
+\begin{frame}
+  There's a game. It has a good physics engine at a specific domain.
+  We need to reuse it for some other task. But the buit-in lua engine
+  has limitations. It doesn't support extension with newly compiled modules.
+  It doesn't have simple ways of building effective bindings for python.
+  The most common language for machine learning.
+
+  Let's reverse the game to get bindings for python.
+\end{frame}
+
+\section{What's been done}
+
+\begin{frame}
+  Results:
+  \begin{enumerate}
+    \item A way of communication with built-in lua for a C++ injected library;
+    \item Python-bindings via message-queue between python and C++ module;
+    \item Steam API has been stubbed, no need for an Steam account.
+  \end{enumerate}
+\end{frame}
+
+\section{Demo}
+
+\begin{frame}
+  \center Let's see it!
+\end{frame}
+
+\section{Conclusion}
+
+\begin{frame}
+  \center{Thanks for attention!}
+\end{frame}
+
+\end{document}

@@ -3,4 +3,4 @@ cmake_minimum_required(VERSION 3.10
 
 add_subdirectory(src/patch_toribash patch_toribash)
 add_subdirectory(src/ddpg ddpg)
-add_subdirectory(doc/ toribash_paper)
+add_subdirectory(doc/ doc)
