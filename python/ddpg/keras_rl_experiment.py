@@ -1141,7 +1141,10 @@ class Helpers:
         finally:
             te.close()
 
-    def mine_dataset(self, client_key, steps_limit, save_prefix):
+    @classmethod
+    def mine_dataset(cls, client_key, steps_limit, save_prefix):
+        assert steps_limit > 100
+
         iteration = 0
         while True:
             raw_states = []
