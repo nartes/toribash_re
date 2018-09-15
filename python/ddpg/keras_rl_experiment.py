@@ -999,6 +999,7 @@ class Models:
             inputs.extend(bounds)
 
             def clip(args):
+                import keras
                 return keras.backend.tf.clip_by_value(*args)
 
             y = keras.layers.Lambda(clip, output_shape=tuple(y.shape.as_list()[1:]))([y, *bounds])
