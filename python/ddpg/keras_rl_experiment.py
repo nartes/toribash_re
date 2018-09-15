@@ -991,11 +991,17 @@ class Models:
                 y = keras.layers.Dense(*self.output_shapes[1], activation='softmax')(y)
         else:
             y = keras.layers.Dense(*self.output_shapes[2], activation='elu')(y)
-            y = keras.layers.Lambda(lambda x:
-                keras.backend.tf.clip_by_value(
-                    x,
-                    *[keras.backend.tf.convert_to_tensor(b.reshape(1, -1), dtype=numpy.float32) \
-                        for b in self.output_bounds[2]]))(y)
+
+            bounds = [keras.layers.Input(tensor=t) for t in \
+                [keras.backend.tf.convert_to_tensor(b.reshape(1, -1), dtype=numpy.float32) \
+                        for b in self.output_bounds[2]]]
+
+            inputs.extend(bounds)
+
+            def clip(args):
+                return keras.backend.tf.clip_by_value(*args)
+
+            y = keras.layers.Lambda(clip, output_shape=tuple(y.shape.as_list()))([y, *bounds])
 
         model = keras.models.Model(inputs=inputs, outputs=y)
 
