@@ -1001,7 +1001,7 @@ class Models:
             def clip(args):
                 return keras.backend.tf.clip_by_value(*args)
 
-            y = keras.layers.Lambda(clip, output_shape=tuple(y.shape.as_list()))([y, *bounds])
+            y = keras.layers.Lambda(clip, output_shape=tuple(y.shape.as_list()[1:]))([y, *bounds])
 
         model = keras.models.Model(inputs=inputs, outputs=y)
 
@@ -1020,7 +1020,7 @@ class Models:
         i1_all = keras.layers.Concatenate(axis=1)([actor.inputs[1], i1_5_reshape, i1_6])
 
         return keras.models.Model(
-            inputs=[actor.inputs[0], actor.inputs[1], i1_6],
+            inputs=[actor.inputs[0], actor.inputs[1], i1_6] + actor.inputs[2:],
             outputs=critic([actor.inputs[0], i1_all]))
 
     def ac_compile(self, ac):
