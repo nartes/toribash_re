@@ -757,6 +757,23 @@ class RawStatesMemory:
             yield ([b[0][0], b[0][1][:, :-2, :], i1.reshape((i1.shape[0], 1) + i1.shape[1:])], b[1])
 
 
+class PatchedInputLayer(keras.layers.InputLayer):
+    def __init__(self, numpy_input_tensor=None, *args, **kwargs):
+        super(PatchedInputLayer, self).__init__(
+            *args,
+            **kwargs,
+            input_tensor=keras.backend.tf.convert_to_tensor(numpy_input_tensor))
+
+        self.numpy_input_tensor = numpy_input_tensor
+
+    def get_config(self):
+        config = {'numpy_input_tensor': self.numpy_input_tensor}
+
+        base_config = super(PatchedInputLayer, self).get_config()
+
+        return dict(list(base_config.items()) + list(config.items()))
+
+
 class Models:
     def __init__(
         self,
@@ -992,17 +1009,21 @@ class Models:
         else:
             y = keras.layers.Dense(*self.output_shapes[2], activation='elu')(y)
 
-            bounds = [keras.layers.Input(tensor=t) for t in \
-                [keras.backend.tf.convert_to_tensor(b.reshape(1, -1), dtype=numpy.float32) \
-                        for b in self.output_bounds[2]]]
+            bounds_layers =  \
+                [PatchedInputLayer(numpy_input_tensor=numpy.float32(b)) \
+                for b in self.output_bounds[2]]
 
-            inputs.extend(bounds)
+            bounds_tensors = [il._inbound_nodes[0].output_tensors[0] for il in bounds_layers]
+
+            inputs.extend(bounds_tensors)
 
             def clip(args):
                 import keras
                 return keras.backend.tf.clip_by_value(*args)
 
-            y = keras.layers.Lambda(clip, output_shape=tuple(y.shape.as_list()[1:]))([y, *bounds])
+            y = keras.layers.Lambda(
+                clip,
+                output_shape=tuple(y.shape.as_list()[1:]))([y, *bounds_tensors])
 
         model = keras.models.Model(inputs=inputs, outputs=y)
 
