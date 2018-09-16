@@ -1061,7 +1061,8 @@ class Helpers:
         model,
         train_steps_multiplier=1.0,
         test_steps_multiplier=1.0,
-        epochs=10):
+        epochs=10,
+        verbose=1):
 
         model.fit_generator(
             self.rsm.prioritized_sample_classification(),
@@ -1071,14 +1072,15 @@ class Helpers:
             validation_steps=int(self.rsm.nb_entries(is_test=True) // \
                 self.rsm.attrs()['batch_size'] * test_steps_multiplier),
             epochs=epochs,
-            verbose=1)
+            verbose=verbose)
 
     def train_regression(
         self,
         model,
         train_steps_multiplier=1.0,
         test_steps_multiplier=1.0,
-        epochs=10):
+        epochs=10,
+        verbose=1):
 
         model.fit_generator(
             self.rsm.prioritized_sample_regression(),
@@ -1088,14 +1090,15 @@ class Helpers:
             validation_steps=int(self.rsm.nb_entries(is_test=True) // \
                 self.rsm.attrs()['batch_size'] * test_steps_multiplier),
             epochs=epochs,
-            verbose=1)
+            verbose=verbose)
 
     def ac_train(
         self,
         model,
         train_steps_multiplier=1.0,
         test_steps_multiplier=1.0,
-        epochs=10):
+        epochs=10,
+        verbose=1):
 
         model.fit_generator(
             self.rsm.sample_for_ac_train(),
@@ -1105,7 +1108,7 @@ class Helpers:
             validation_steps=int(self.rsm.nb_entries(is_test=True) // \
                 self.rsm.attrs()['batch_size'] * test_steps_multiplier),
             epochs=epochs,
-            verbose=1)
+            verbose=verbose)
 
     @classmethod
     def actor_input_from_raw_states(cls, raw_states, actor):
@@ -1428,7 +1431,7 @@ class KerasRlExperiment:
             keras.optimizers.RMSprop(lr=1e-3)],
             metrics=['mse', 'mae'])
 
-    def train(self, epochs=20, nb_steps=None):
+    def train(self, epochs=20, nb_steps=None, verbose=1):
         self.log_interval = self.warm_up // 2
 
         if nb_steps is None:
@@ -1446,7 +1449,7 @@ class KerasRlExperiment:
                 self.env,
                 nb_steps=nb_steps,
                 visualize=False,
-                verbose=1,
+                verbose=verbose,
                 log_interval=self.log_interval)
 
             # After training is done, we save the final weights.
