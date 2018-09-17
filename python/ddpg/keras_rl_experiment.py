@@ -1123,11 +1123,12 @@ class Helpers:
         train_steps_multiplier=1.0,
         test_steps_multiplier=1.0,
         epochs=10,
-        verbose=1):
+        verbose=1,
+        player=0):
 
         model.fit_generator(
-            self.rsm.sample_for_ac_train(),
-            validation_data=self.rsm.sample_for_ac_train(is_test=True),
+            self.rsm.sample_for_ac_train(player=player),
+            validation_data=self.rsm.sample_for_ac_train(is_test=True, player=player),
             steps_per_epoch=int(self.rsm.nb_entries() // \
                 self.rsm.attrs()['batch_size'] * train_steps_multiplier),
             validation_steps=int(self.rsm.nb_entries(is_test=True) // \
