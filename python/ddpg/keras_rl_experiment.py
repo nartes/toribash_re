@@ -457,9 +457,11 @@ class Datasets:
         return rs_ctypes
 
     @classmethod
-    def get_some_features(cls, raw_states):
+    def get_some_features(cls, raw_states, player=0):
+        assert player in [0, 1]
+
         d = pandas.DataFrame({
-            'injuries': numpy.array([rs.players[0].injury for rs in raw_states])})
+            'injuries': numpy.array([rs.players[player].injury for rs in raw_states])})
         d['diff_injuries'] = d['injuries']
         d['diff_injuries'].iloc[1:] = d['injuries'].diff()
         d['match_frame'] = numpy.array([rs.world_state.match_frame for rs in raw_states])
@@ -640,6 +642,8 @@ class Datasets:
                         batch_idxs.append(i + k)
 
             for i in batch_idxs:
+                assert i >= attrs['window_length'] and i < len(raw_states)
+
                 x = numpy.stack(sum([
                     [numpy.array(raw_states[k].players[p].joints_pos_3d) \
                         for p in range(2)] for k in range(i - attrs['window_length'], i)], []))
@@ -678,7 +682,8 @@ class RawStatesMemory:
         validation_split=0.3,
         window_length=3,
         train_window_length=3,
-        batch_size=64):
+        batch_size=64,
+        player=0):
 
         self.hdf_paths = hdf_paths
         self.dataset_split = dataset_split
@@ -694,7 +699,7 @@ class RawStatesMemory:
                 dataset_split=dataset_split,
                 validation_split=validation_split)
 
-            fs = Datasets.get_some_features(rs)
+            fs = Datasets.get_some_features(rs, player=0)
 
             df = Datasets.get_distribution_features(
                 fs,
@@ -746,15 +751,26 @@ class RawStatesMemory:
 
             yield b
 
-    def sample_for_ac_train(self, **kwargs):
+    def sample_for_ac_train(self, player=0, **kwargs):
+        assert player in [0, 1]
+
         g = self.prioritized_sample_classification(**kwargs)
 
         while True:
             b = next(g)
 
-            i1 = b[0][1][:, -1, :]
+            if player == 0:
+                opponent_action_index = -1
+            else:
+                opponent_action_index = -2
 
-            yield ([b[0][0], b[0][1][:, :-2, :], i1.reshape((i1.shape[0], 1) + i1.shape[1:])], b[1])
+
+            i1 = b[0][1][:, opponent_action_index, :]
+
+            yield ([\
+                b[0][0],
+                b[0][1][:, :-2, :],
+                i1.reshape((i1.shape[0], 1) + i1.shape[1:])], b[1])
 
 
 class PatchedInputLayer(keras.layers.InputLayer):
@@ -1031,18 +1047,27 @@ class Models:
 
         return model
 
-    def actor_critic(self, actor, critic):
+    def actor_critic(self, actor, critic, player=0):
         assert not critic.trainable
 
-        i1_6 = keras.layers.Input(batch_shape=(self.batch_size, 1, self.input_shapes[1][-1]))
+        assert player in [0, 1]
 
-        i1_5_reshape = keras.layers.Reshape(
-            target_shape=(i1_6.shape.as_list()[1:]))(actor.outputs[0])
+        i1_opponent = keras.layers.Input(batch_shape=(self.batch_size, 1, self.input_shapes[1][-1]))
 
-        i1_all = keras.layers.Concatenate(axis=1)([actor.inputs[1], i1_5_reshape, i1_6])
+        i1_actor_reshape = keras.layers.Reshape(
+            target_shape=(i1_opponent.shape.as_list()[1:]))(actor.outputs[0])
+
+        actions = [actor.inputs[1]]
+
+        if player == 0:
+            actions += [i1_actor_reshape, i1_opponent]
+        else:
+            actions += [i1_opponent, i1_actor_reshape]
+
+        i1_all = keras.layers.Concatenate(axis=1)(actions)
 
         return keras.models.Model(
-            inputs=[actor.inputs[0], actor.inputs[1], i1_6] + actor.inputs[2:],
+            inputs=[actor.inputs[0], actor.inputs[1], i1_opponent] + actor.inputs[2:],
             outputs=critic([actor.inputs[0], i1_all]))
 
     def ac_compile(self, ac):
@@ -1111,19 +1136,24 @@ class Helpers:
             verbose=verbose)
 
     @classmethod
-    def actor_input_from_raw_states(cls, raw_states, actor):
+    def model_input_from_raw_states(cls, raw_states, actor, shift=False, shrink_end=False):
         attrs = {
             'window_length': actor.input_shape[0][1] // 2,
             'window_size': 1,
             'batch_size': actor.input_shape[0][0]
         }
 
-        if len(raw_states) < attrs['window_length']:
+        assert not (shift and not shrink_end)
+
+        if len(raw_states) < attrs['window_length'] + 1:
             extended_raw_states = \
-                raw_states[:1] * (attrs['window_length'] - len(raw_states)) + \
+                raw_states[:1] * (attrs['window_length'] + 1 - len(raw_states)) + \
                 raw_states
         else:
-            extended_raw_states = raw_states
+            extended_raw_states = raw_states[-(attrs['window_length'] + 1):]
+
+        if shift:
+            extended_raw_states.append(extended_raw_states[-1])
 
         features = pandas.DataFrame({
             'diff_injuries': numpy.zeros(len(extended_raw_states))
@@ -1139,10 +1169,17 @@ class Helpers:
             balanced_idxs,
             has_noise_injection=False))
 
-        return [b[0][0], b[0][1][:, 2:, :]]
+        if not shrink_end:
+            actions = b[0][1][:, 2:, :]
+        else:
+            actions = b[0][1][:, :-2, :]
+
+        return [b[0][0], actions]
 
     @classmethod
-    def play_with_actor(cls, actor, client_key, has_workaround=False):
+    def play_with_actor(cls, actor, client_key, has_workaround=False, player=0):
+        assert player in [0, 1]
+
         try:
             raw_states = []
 
@@ -1152,17 +1189,25 @@ class Helpers:
                 st = te.reset()
                 while True:
                     raw_states.append(te._cur_state)
-                    act0 = actor.predict(
-                        cls.actor_input_from_raw_states(
+                    act_player = actor.predict(
+                        cls.model_input_from_raw_states(
                             raw_states,
-                            actor))[0, ...].flatten()
+                            actor,
+                            shift=True,
+                            shrink_end=True))[0, ...].flatten()
                     if has_workaround:
-                        act0 = numpy.clip(
-                            act0,
+                        act_player = numpy.clip(
+                            act_player,
                             te.action_bound[0, :22],
                             te.action_bound[1, :22])
-                    act1 = numpy.array([3,] * 20 + [1,] * 2, dtype=numpy.float32)
-                    o, r, d, i = te.step(numpy.concatenate([act0, act1]))
+                    act_opponent = numpy.array([3,] * 20 + [1,] * 2, dtype=numpy.float32)
+
+                    if player == 0:
+                        act_total = [act_player, act_opponent]
+                    else:
+                        act_total = [act_opponent, act_player]
+
+                    o, r, d, i = te.step(numpy.concatenate(act_total))
                     if d:
                         break
                 if len(raw_states) > 100:
