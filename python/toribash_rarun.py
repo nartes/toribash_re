@@ -165,10 +165,8 @@ def sub_shell(cmds,
     return ret
 
 
-os.environ['toribash_out'] = sub_shell('echo -E $PWD/build/toribash_out',
-                                       communicate=True).strip()
-os.environ['toribash_common'] = sub_shell('echo -E $PWD/build/toribash',
-                                          communicate=True).strip()
+os.environ['toribash_out'] = os.path.join(os.path.abspath(os.path.curdir), 'build', 'toribash_out')
+os.environ['toribash_common'] = os.path.join(os.path.abspath(os.path.curdir), 'build', 'toribash')
 os.environ['radare2_http_port'] = os.environ.get('radare2_http_port') or '9998'
 os.environ['radare2_tcp_port'] = os.environ.get('radare2_tcp_port') or '9997'
 
