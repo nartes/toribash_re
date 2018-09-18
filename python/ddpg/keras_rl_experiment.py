@@ -833,6 +833,8 @@ class Models:
 
         assert window_length >= 1
 
+        self.maximum_log_diff_injury = maximum_log_diff_injury
+
         self.input_shapes = [ \
             (2 * window_length, 3, 20),
             (2 * window_length, 22),
