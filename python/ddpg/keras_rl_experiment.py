@@ -460,8 +460,13 @@ class Datasets:
     def get_some_features(cls, raw_states, player=0):
         assert player in [0, 1]
 
+        if player==0:
+            injury_lambda = lambda rs: rs.players[1].injury - 0.95 * rs.players[0].injury
+        else:
+            injury_lambda = lambda rs: rs.players[0].injury - 0.95 * rs.players[1].injury
+
         d = pandas.DataFrame({
-            'injuries': numpy.array([rs.players[player].injury for rs in raw_states])})
+            'injuries': numpy.array([injury_lambda(rs) for rs in raw_states])})
         d['diff_injuries'] = d['injuries']
         d['diff_injuries'].iloc[1:] = d['injuries'].diff()
         d['match_frame'] = numpy.array([rs.world_state.match_frame for rs in raw_states])
@@ -470,11 +475,28 @@ class Datasets:
         return d
 
     @classmethod
+    def discretize_and_clip_value(
+        cls,
+        value,
+        clip_value):
+
+        cur = value.copy()
+        cur[numpy.abs(cur) < 1] = 1.0
+        cur = numpy.round(numpy.sign(cur) * numpy.log10(numpy.abs(cur)))
+        cur = numpy.clip(cur, -clip_value, clip_value)
+
+        return cur
+
+
+    @classmethod
     def get_distribution_features(
         cls,
         features,
         window_length,
-        train_window_length):
+        train_window_length,
+        maximum_log_diff_injury=2):
+
+        assert maximum_log_diff_injury > 0
 
         total_sequence_length = train_window_length + 1
         window_size = total_sequence_length - window_length
@@ -495,7 +517,13 @@ class Datasets:
 
         i1 = (numpy.sum(mf_z3[:, 1:] == 0, axis=1) == 0)
 
-        i2 = numpy.sum(di_z3[:, -window_size:] > 0, axis=1)
+        assert window_size == 1
+
+        i2 = cls.discretize_and_clip_value(
+            di_z3[:, -window_size:],
+            maximum_log_diff_injury).flatten()
+
+        #i2 = numpy.sum(di_z3[:, -window_size:] > 0, axis=1)
 
         i3 = z3[:, -1][i1]
 
@@ -508,10 +536,11 @@ class Datasets:
         eta_k = u_i3[0].size - 1
         eta_l = numpy.arange(eta_k + 1)
 
-        eta_pi = scipy.misc.factorial(eta_k) / \
-            scipy.misc.factorial(eta_l) / \
-            scipy.misc.factorial(eta_k - eta_l) / \
-            (2.0 ** eta_k)
+        #eta_pi = scipy.misc.factorial(eta_k) / \
+        #    scipy.misc.factorial(eta_l) / \
+        #    scipy.misc.factorial(eta_k - eta_l) / \
+        #    (2.0 ** eta_k)
+        eta_pi = numpy.ones(eta_l.size) / eta_l.size
 
         eta_g = scipy.stats.rv_discrete(values=(eta_l, eta_pi))
 
@@ -683,12 +712,16 @@ class RawStatesMemory:
         window_length=3,
         train_window_length=3,
         batch_size=64,
-        player=0):
+        player=0,
+        maximum_log_diff_injury=2):
+
+        assert maximum_log_diff_injury > 0
 
         self.hdf_paths = hdf_paths
         self.dataset_split = dataset_split
 
         self.batch_size = batch_size
+        self.maximum_log_diff_injury = maximum_log_diff_injury
 
         self.brswf = {}
 
@@ -699,12 +732,13 @@ class RawStatesMemory:
                 dataset_split=dataset_split,
                 validation_split=validation_split)
 
-            fs = Datasets.get_some_features(rs, player=0)
+            fs = Datasets.get_some_features(rs, player=player)
 
             df = Datasets.get_distribution_features(
                 fs,
                 window_length=window_length,
-                train_window_length=train_window_length)
+                train_window_length=train_window_length,
+                maximum_log_diff_injury=self.maximum_log_diff_injury)
 
             df['raw_states'] = rs
             df['features'] = fs
@@ -738,11 +772,9 @@ class RawStatesMemory:
         while True:
             b = next(g)
 
-            i = b[1] > 0
-            b[1][i] = 1
-            b[1][~i] = 0
+            y_test = Datasets.discretize_and_clip_value(b[1], self.maximum_log_diff_injury)
 
-            yield b[0], keras.utils.to_categorical(b[1], 2)
+            yield b[0], keras.utils.to_categorical(y_test, self.maximum_log_diff_injury * 2 + 1)
 
     def prioritized_sample_regression(self, **kwargs):
         g = self.prioritized_sample(**kwargs)
@@ -794,7 +826,10 @@ class Models:
     def __init__(
         self,
         batch_size=32,
-        window_length=1):
+        window_length=1,
+        maximum_log_diff_injury=2):
+
+        assert maximum_log_diff_injury > 0
 
         assert window_length >= 1
 
@@ -806,7 +841,7 @@ class Models:
 
         self.output_shapes = [
             (1,),
-            (2,),
+            (maximum_log_diff_injury * 2 + 1,),
             (22,)
             ]
 
@@ -1137,14 +1172,14 @@ class Helpers:
             verbose=verbose)
 
     @classmethod
-    def model_input_from_raw_states(cls, raw_states, actor, shift=False, shrink_end=False):
+    def model_input_from_raw_states(cls, raw_states, actor, shift=False, shrink=False):
         attrs = {
             'window_length': actor.input_shape[0][1] // 2,
             'window_size': 1,
             'batch_size': actor.input_shape[0][0]
         }
 
-        assert not (shift and not shrink_end)
+        assert shrink in ['begin', 'end', None, False]
 
         if len(raw_states) < attrs['window_length'] + 1:
             extended_raw_states = \
@@ -1170,10 +1205,12 @@ class Helpers:
             balanced_idxs,
             has_noise_injection=False))
 
-        if not shrink_end:
+        if shrink == 'begin':
             actions = b[0][1][:, 2:, :]
-        else:
+        elif shrink == 'end':
             actions = b[0][1][:, :-2, :]
+        else:
+            actions = b[0][1]
 
         return [b[0][0], actions]
 
@@ -1195,7 +1232,7 @@ class Helpers:
                             raw_states,
                             actor,
                             shift=True,
-                            shrink_end=True))[0, ...].flatten()
+                            shrink='end'))[0, ...].flatten()
                     if has_workaround:
                         act_player = numpy.clip(
                             act_player,
