@@ -475,12 +475,18 @@ class Datasets:
         return d
 
     @classmethod
-    def discretize_and_clip_value(
+    def scale_discretize_and_clip_value(
         cls,
         value,
+        scale,
         clip_value):
 
+        assert scale >= 0.0
+
         cur = value.copy()
+        i1 = numpy.logical_and(numpy.abs(cur) < 10 ** scale, numpy.abs(cur) > 1e-6)
+        cur[i1] = numpy.sign(cur[i1]) * (10 ** (scale + 1))
+        cur /= 10 ** scale
         cur[numpy.abs(cur) < 1] = 1.0
         cur = numpy.round(numpy.sign(cur) * numpy.log10(numpy.abs(cur)))
         cur = numpy.clip(cur, -clip_value, clip_value)
@@ -494,9 +500,11 @@ class Datasets:
         features,
         window_length,
         train_window_length,
+        scale_diff_injury=2,
         maximum_log_diff_injury=2):
 
         assert maximum_log_diff_injury > 0
+        assert scale_diff_injury > 0.0
 
         total_sequence_length = train_window_length + 1
         window_size = total_sequence_length - window_length
@@ -519,8 +527,9 @@ class Datasets:
 
         assert window_size == 1
 
-        i2 = cls.discretize_and_clip_value(
+        i2 = cls.scale_discretize_and_clip_value(
             di_z3[:, -window_size:],
+            scale_diff_injury,
             maximum_log_diff_injury).flatten()
 
         #i2 = numpy.sum(di_z3[:, -window_size:] > 0, axis=1)
@@ -713,15 +722,18 @@ class RawStatesMemory:
         train_window_length=3,
         batch_size=64,
         player=0,
+        scale_diff_injury=2,
         maximum_log_diff_injury=2):
 
         assert maximum_log_diff_injury > 0
+        assert scale_diff_injury > 0.0
 
         self.hdf_paths = hdf_paths
         self.dataset_split = dataset_split
 
         self.batch_size = batch_size
         self.maximum_log_diff_injury = maximum_log_diff_injury
+        self.scale_diff_injury = scale_diff_injury
 
         self.brswf = {}
 
@@ -738,7 +750,12 @@ class RawStatesMemory:
                 fs,
                 window_length=window_length,
                 train_window_length=train_window_length,
+                scale_diff_injury=scale_diff_injury,
                 maximum_log_diff_injury=self.maximum_log_diff_injury)
+            pprint.pprint({
+                'is_test': is_test,
+                'u_i3_counts': df['distribution_features']['u_i3'][1]
+            })
 
             df['raw_states'] = rs
             df['features'] = fs
@@ -772,7 +789,10 @@ class RawStatesMemory:
         while True:
             b = next(g)
 
-            y_test = Datasets.discretize_and_clip_value(b[1], self.maximum_log_diff_injury)
+            y_test = Datasets.scale_discretize_and_clip_value(
+                b[1],
+                self.scale_diff_injury,
+                self.maximum_log_diff_injury)
 
             yield b[0], keras.utils.to_categorical(y_test, self.maximum_log_diff_injury * 2 + 1)
 
