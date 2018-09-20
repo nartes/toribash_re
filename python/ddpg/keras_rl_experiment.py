@@ -792,7 +792,7 @@ class RawStatesMemory:
             y_test = Datasets.scale_discretize_and_clip_value(
                 b[1],
                 self.scale_diff_injury,
-                self.maximum_log_diff_injury)
+                self.maximum_log_diff_injury) + self.maximum_log_diff_injury
 
             yield b[0], keras.utils.to_categorical(y_test, self.maximum_log_diff_injury * 2 + 1)
 
